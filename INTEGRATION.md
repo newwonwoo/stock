@@ -3,6 +3,9 @@
 > **이 문서는 인터페이스 명세서입니다.**
 > 매수/매도 전략·위험방지 로직은 TradeBot 측에서 결정.
 > 본 문서는 **데이터 인터페이스만** 정의.
+>
+> **봇 측 결정 (2026-05-03)**: Firestore 사용 X. 통신 = SSH file push (리서치→봇) + dashboard GET (봇→리서치).
+> 데이터 schema 는 본 문서 그대로. 통신 수단만 다름. 상세 = `docs/SWING_INTEGRATION_BOT.md`.
 
 ---
 
