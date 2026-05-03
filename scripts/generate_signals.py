@@ -28,8 +28,12 @@ from src import config
 from src.analyzers import (
     buy_signal_generator,
     credit_short,
+    financial_trend,
     flow_analysis,
     macro_brief,
+    margin_diagnosis,
+    nps_tracker,
+    quant_health,
     technical,
 )
 from src.collectors import krx_fetcher
@@ -82,6 +86,84 @@ def _kis_indices_safe() -> dict[str, Any]:
         return {}
 
 
+def _init_dart() -> tuple[Any, dict[str, str]]:
+    """DART fetcher + corp_code 매핑. 키 없으면 (None, {})."""
+    if not config.DART_API_KEY:
+        log.info("DART_API_KEY 미설정 — DART 4필터 skip")
+        return (None, {})
+    try:
+        from src.collectors.dart_fetcher import DartFetcher
+        from src.collectors.dart_corp_cache import load_or_refresh
+        f = DartFetcher()
+        mapping = load_or_refresh(f)
+        return (f, mapping)
+    except Exception as e:
+        log.info(f"DART init 실패 skip: {e}")
+        return (None, {})
+
+
+def _dart_filters(
+    fetcher: Any,
+    corp_code: str | None,
+) -> dict[str, Any]:
+    """DART 의존 4필터 (financial_trend / quant_health / margin_diagnosis / nps) 결과."""
+    from src.analyzers.base import FilterResult, YELLOW
+
+    skipped = lambda reason: FilterResult(grade=YELLOW, score=60, details={"reason": reason})
+
+    if not fetcher or not corp_code:
+        s = skipped("DART_unavailable")
+        return {"financial_trend": s, "quant_health": s, "margin_diagnosis": s, "nps": s}
+
+    from src.collectors.dart_financials import (
+        extract_nps_holding_change,
+        get_recent_annuals,
+    )
+
+    out: dict[str, Any] = {}
+    try:
+        annuals = get_recent_annuals(fetcher, corp_code, years=2)
+    except Exception as e:
+        log.info(f"DART annuals 실패 corp={corp_code}: {e}")
+        annuals = []
+
+    if len(annuals) >= 2:
+        prev, curr = annuals[-2], annuals[-1]
+        out["financial_trend"] = financial_trend.analyze(
+            quarterly_revenue=[prev.revenue, curr.revenue],
+            quarterly_op_profit=[prev.op_profit, curr.op_profit],
+        )
+        out["quant_health"] = quant_health.analyze(
+            revenue=curr.revenue,
+            receivables=curr.receivables,
+            op_profit=curr.op_profit,
+            operating_cf=curr.operating_cf,
+            total_debt=curr.total_liab,
+            equity=curr.total_equity,
+        )
+        rev_yoy = (curr.revenue - prev.revenue) / prev.revenue if prev.revenue else 0
+        out["margin_diagnosis"] = margin_diagnosis.analyze(
+            opm_prev=prev.opm,
+            opm_curr=curr.opm,
+            revenue_yoy=rev_yoy,
+        )
+    else:
+        s = skipped("DART_insufficient_annuals")
+        out["financial_trend"] = s
+        out["quant_health"] = s
+        out["margin_diagnosis"] = s
+
+    try:
+        major = fetcher.fetch_major_stock_changes(corp_code)
+        prev_pct, curr_pct = extract_nps_holding_change(major)
+        out["nps"] = nps_tracker.analyze(prev_pct, curr_pct)
+    except Exception as e:
+        log.info(f"DART NPS 실패 corp={corp_code}: {e}")
+        out["nps"] = skipped("DART_nps_failed")
+
+    return out
+
+
 def _index_change(idx: dict[str, dict[str, Any]], name: str) -> float:
     p = idx.get(name) or {}
     val = p.get("bstp_nmix_prdy_ctrt") or p.get("prdy_ctrt") or 0
@@ -112,6 +194,8 @@ def main() -> int:
 
     tg_msgs = _telegram_messages()
 
+    dart_fetcher, corp_map = _init_dart()
+
     # 2. 종목별 분석
     signals: list[dict[str, Any]] = []
     for t in universe:
@@ -134,14 +218,16 @@ def main() -> int:
         except Exception:
             fo = None
 
-        # 분석기 호출 (수집 가능한 것만; DART 의존 필터는 MVP 에서 skip)
         from src.analyzers import report_momentum
         from src.analyzers.base import GREEN, FilterResult, YELLOW
 
+        corp_code = corp_map.get(t.code)
+        dart_results = _dart_filters(dart_fetcher, corp_code)
+
         filters = {
-            "financial_trend": FilterResult(grade=YELLOW, score=60, details={"reason": "DART_skipped"}),
-            "quant_health": FilterResult(grade=YELLOW, score=60, details={"reason": "DART_skipped"}),
-            "margin_diagnosis": FilterResult(grade=YELLOW, score=60, details={"reason": "DART_skipped"}),
+            "financial_trend": dart_results["financial_trend"],
+            "quant_health": dart_results["quant_health"],
+            "margin_diagnosis": dart_results["margin_diagnosis"],
             "moat": FilterResult(
                 grade=GREEN if t.code in _whitelist_codes() else YELLOW,
                 score=80 if t.code in _whitelist_codes() else 50,
@@ -149,7 +235,7 @@ def main() -> int:
             ),
             "flow": flow_analysis.analyze(inv, fo) if not inv.empty else FilterResult(YELLOW, 50, {"reason": "no_flow"}),
             "credit_short": credit_short.analyze(t.code, short_top_codes),
-            "nps": FilterResult(grade=YELLOW, score=60, details={"reason": "DART_skipped"}),
+            "nps": dart_results["nps"],
             "technical": technical.analyze(ohlcv),
             "report": report_momentum.analyze(t.code, tg_msgs),
         }
