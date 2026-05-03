@@ -15,6 +15,8 @@ jobs:
     env:
       DART_API_KEY: ${{ secrets.DART_API_KEY }}
       RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
+      BOT_DASHBOARD_URL: ${{ secrets.BOT_DASHBOARD_URL }}
+      SWING_API_TOKEN: ${{ secrets.SWING_API_TOKEN }}
       EC2_INCOMING: /home/ec2-user/tradingbot/data/research/incoming
       EC2_FINAL: /home/ec2-user/tradingbot/data/research
       PYTHONPATH: ${{ github.workspace }}
@@ -45,6 +47,14 @@ jobs:
           key: dart-corp-${{ github.run_id }}
           restore-keys: |
             dart-corp-
+
+      - name: Restore CB/BW tracker
+        uses: actions/cache@v4
+        with:
+          path: .cache/cb_tracker.json
+          key: cb-tracker-${{ github.run_id }}
+          restore-keys: |
+            cb-tracker-
 
       - name: Generate sell signals
         if: ${{ env.DART_API_KEY != '' && env.RESEARCH_HMAC_KEY != '' }}

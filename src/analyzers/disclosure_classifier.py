@@ -106,8 +106,8 @@ RULES: list[DisclosureRule] = [
     DisclosureRule(
         "EARNING_DISCLOSURE",
         re.compile(r"잠정실적|영업\(잠정\)실적|매출액.*손익.*잠정"),
-        REVIEW, EFFECT_SELL,
-        description="잠정실적 발표 (방향 별도 판단)",
+        URGENT, EFFECT_SELL,
+        description="잠정실적 발표 — 매도 트리거",
     ),
     DisclosureRule(
         "BLOCK_DEAL_INSTITUTION",

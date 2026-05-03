@@ -22,8 +22,10 @@ from pathlib import Path
 from typing import Any
 
 from src import config
+from src.analyzers.cb_bw_tracker import register_cb
 from src.analyzers.disclosure_classifier import classify
 from src.analyzers.sell_signal_generator import generate as make_sell_signal
+from src.integrations.bot_dashboard import held_stock_codes
 from src.utils.kst_time import fmt_compact, today_kst
 from src.utils.logger import get_logger
 
@@ -83,24 +85,50 @@ def main() -> int:
     disclosures = fetcher.fetch_daily_disclosures(today_compact)
     log.info(f"disclosures fetched: {len(disclosures)}")
 
+    held = held_stock_codes()
+    if held is None:
+        log.info("BOT dashboard 미사용 — 전종목 대상 (보유 필터 없음)")
+    else:
+        log.info(f"보유 종목 {len(held)}개만 sell_signal 발행")
+
     processed = _load_processed()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     new_count = 0
+    cb_registered = 0
 
     for d in disclosures:
         report_nm = d.get("report_nm") or ""
         cd = classify(report_nm)
-        if cd is None or cd.effect != "SELL_TRIGGER":
+        if cd is None:
             continue
 
         corp_code = d.get("corp_code") or ""
         stock_code = corp_to_stock.get(corp_code)
         if not stock_code:
-            # 비상장은 skip
             continue
 
-        rcept_no = d.get("rcept_no")
+        rcept_no = d.get("rcept_no") or ""
         rcept_dt = d.get("rcept_dt")
+
+        # CB/BW 발행은 추적기에 등록 (보유 여부 무관 — 미래 매수 가능성)
+        if cd.type_code == "CB_BW_ISSUE":
+            from datetime import date
+            issued = None
+            if rcept_dt and len(rcept_dt) == 8:
+                try:
+                    issued = date(int(rcept_dt[:4]), int(rcept_dt[4:6]), int(rcept_dt[6:8]))
+                except Exception:
+                    issued = None
+            if register_cb(stock_code, rcept_no, report_nm, issued_date=issued):
+                cb_registered += 1
+
+        if cd.effect != "SELL_TRIGGER":
+            continue
+
+        # 보유 종목 필터 (dashboard 사용 가능 시만)
+        if held is not None and stock_code not in held:
+            continue
+
         sig = make_sell_signal(
             code=stock_code,
             name=d.get("corp_name") or "",
@@ -122,7 +150,7 @@ def main() -> int:
         new_count += 1
 
     _save_processed(processed)
-    log.info(f"done: new={new_count} total_processed={len(processed)}")
+    log.info(f"done: new={new_count} cb_registered={cb_registered} total_processed={len(processed)}")
     return 0
 
 

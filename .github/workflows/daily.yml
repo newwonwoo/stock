@@ -20,6 +20,8 @@ jobs:
       TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
       RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
+      BOT_DASHBOARD_URL: ${{ secrets.BOT_DASHBOARD_URL }}
+      SWING_API_TOKEN: ${{ secrets.SWING_API_TOKEN }}
       EC2_INCOMING: /home/ec2-user/tradingbot/data/research/incoming
       EC2_FINAL: /home/ec2-user/tradingbot/data/research
       PYTHONPATH: ${{ github.workspace }}
@@ -65,11 +67,24 @@ jobs:
           "
         continue-on-error: true
 
+      - name: Restore CB/BW tracker
+        uses: actions/cache@v4
+        with:
+          path: .cache/cb_tracker.json
+          key: cb-tracker-${{ github.run_id }}
+          restore-keys: |
+            cb-tracker-
+
       - name: Generate signed buy_signals + macro + blacklist
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
         env:
           UNIVERSE_LIMIT: "30"
         run: python scripts/generate_signals.py
+
+      - name: CB/BW exercise-period sell signals
+        if: ${{ env.RESEARCH_HMAC_KEY != '' }}
+        run: python scripts/cb_bw_check.py
+        continue-on-error: true
 
       - name: Verify HMAC envelopes before push
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
@@ -115,10 +130,12 @@ jobs:
       - name: SCP signed JSONs to EC2 incoming
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
         run: |
-          scp -i ~/.ssh/ec2_key \
-            out/buy_signals_*.json \
-            out/macro_status_*.json \
-            out/blacklist_active.json \
+          shopt -s nullglob
+          files=(out/buy_signals_*.json out/macro_status_*.json out/blacklist_active.json out/sell_signal_*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no signed files to push"; exit 0
+          fi
+          scp -i ~/.ssh/ec2_key "${files[@]}" \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${EC2_INCOMING}/
 
       - name: Atomic move incoming -> final
