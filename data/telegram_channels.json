@@ -1,0 +1,6 @@
+{
+  "channels": [
+    {"username": "butler_works", "type": "broker_summary", "name": "버틀러웍스 (예시)"}
+  ],
+  "_note": "사용자가 실제 채널 목록으로 교체. type = broker_summary | core_analyst | fallback. core_analyst 의 경우 운영자 이름을 name 에 기입."
+}
