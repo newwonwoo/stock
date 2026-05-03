@@ -30,6 +30,7 @@ from src.analyzers import (
     credit_short,
     financial_trend,
     flow_analysis,
+    hot_sectors,
     macro_brief,
     margin_diagnosis,
     nps_tracker,
@@ -284,7 +285,18 @@ def main() -> int:
         key,
     )
 
-    log.info(f"done: signals={len(signals)} blacklist={len(blacklist)}")
+    # hot sectors (KRX 업종 지수 5d/20d)
+    try:
+        hot_payload = hot_sectors.generate()
+    except Exception as e:
+        log.info(f"hot_sectors 생성 실패 (skip): {e}")
+        hot_payload = {"date": today_str, "hot_sectors": [], "cold_sectors": [], "all_sectors": []}
+    _write_signed(OUT_DIR / f"hot_sectors_{today_str}.json", hot_payload, key)
+
+    log.info(
+        f"done: signals={len(signals)} blacklist={len(blacklist)} "
+        f"hot={len(hot_payload['hot_sectors'])} cold={len(hot_payload['cold_sectors'])}"
+    )
     return 0
 
 

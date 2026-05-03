@@ -95,7 +95,8 @@ jobs:
           fails = []
           for f in sorted(glob.glob("out/buy_signals_*.json")
                           + glob.glob("out/macro_status_*.json")
-                          + glob.glob("out/blacklist_active.json")):
+                          + glob.glob("out/blacklist_active.json")
+                          + glob.glob("out/hot_sectors_*.json")):
               p = json.load(open(f, encoding="utf-8"))
               if p.get("signed_by") != "research_v1" or "sha256_hmac" not in p or "data" not in p:
                   fails.append((f, "envelope shape"))
@@ -131,7 +132,7 @@ jobs:
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
         run: |
           shopt -s nullglob
-          files=(out/buy_signals_*.json out/macro_status_*.json out/blacklist_active.json out/sell_signal_*.json)
+          files=(out/buy_signals_*.json out/macro_status_*.json out/blacklist_active.json out/hot_sectors_*.json out/sell_signal_*.json)
           if [ ${#files[@]} -eq 0 ]; then
             echo "no signed files to push"; exit 0
           fi

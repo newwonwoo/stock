@@ -1,0 +1,81 @@
+name: Weekly Picks + Forward Tracker
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 매주 일요일 21:00 KST = 일요일 12:00 UTC
+    - cron: "0 12 * * 0"
+
+permissions:
+  contents: write   # data/recommendations/ 자동 커밋
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+      KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+      RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore DART corp_code cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/dart_corp_codes.json
+          key: dart-corp-${{ github.run_id }}
+          restore-keys: |
+            dart-corp-
+
+      - name: Generate fresh signals (universe scan)
+        if: ${{ env.RESEARCH_HMAC_KEY != '' }}
+        env:
+          UNIVERSE_LIMIT: "60"   # 주말은 더 넓게
+        run: python scripts/generate_signals.py
+
+      - name: Pick top 5 + persist recommendation
+        if: ${{ env.RESEARCH_HMAC_KEY != '' }}
+        run: python scripts/weekly_picks.py
+
+      - name: Forward tracker (4 weeks ago)
+        run: python scripts/forward_tracker.py
+        continue-on-error: true
+
+      - name: Auto-commit recommendations
+        run: |
+          if [ -z "$(git status --porcelain data/recommendations/)" ]; then
+            echo "no new recommendations to commit"
+            exit 0
+          fi
+          git config user.name "research-bot"
+          git config user.email "research-bot@users.noreply.github.com"
+          git add data/recommendations/
+          git commit -m "weekly recommendations $(date -u +%Y-%m-%d)"
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-${{ github.run_id }}
+          path: |
+            out/weekly_picks_*.json
+            out/weekly_performance_*.json
+            out/buy_signals_*.json
+            out/hot_sectors_*.json
+            data/recommendations/
+          if-no-files-found: ignore
+          retention-days: 90

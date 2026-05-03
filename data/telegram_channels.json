@@ -1,6 +1,21 @@
 {
+  "_doc": {
+    "purpose": "텔레그램 채널 listener 대상 목록.",
+    "type_options": {
+      "broker_summary": "정형 브로커 리포트 요약 채널 (목표가 + 의견 정규식 추출)",
+      "core_analyst":   "코어 애널리스트 운영 채널 (자유 포맷, 키워드 매칭)",
+      "fallback":       "메타데이터만 (종목코드만 추출)"
+    },
+    "fields": {
+      "username":     "@ 제외, 영문 채널명. 예: @butler_works → \"butler_works\"",
+      "type":         "위 type_options 중 하나",
+      "name":         "표시용 한글명 (선택). core_analyst 일 경우 운영자 이름",
+      "since_date":   "이 날짜 이후 메시지만 fetch (선택, ISO 8601). 미지정 시 cursor 부터"
+    },
+    "usage": "이 파일 수정 후 commit + push. 다음 daily.yml run 부터 적용.",
+    "core_analysts_ref": "data/core_analysts.json 의 명단과 매칭됨 (실 운영자 검증용)"
+  },
   "channels": [
-    {"username": "butler_works", "type": "broker_summary", "name": "버틀러웍스 (예시)"}
-  ],
-  "_note": "사용자가 실제 채널 목록으로 교체. type = broker_summary | core_analyst | fallback. core_analyst 의 경우 운영자 이름을 name 에 기입."
+    {"username": "butler_works", "type": "broker_summary", "name": "버틀러웍스 (예시 - 실제 채널로 교체)"}
+  ]
 }
