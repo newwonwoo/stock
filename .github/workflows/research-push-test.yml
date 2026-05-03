@@ -1,0 +1,38 @@
+name: Research SSH Push Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create test JSON
+        run: |
+          mkdir -p out
+          cat > out/push_test.json << 'EOF'
+          {
+            "test": true,
+            "message": "github actions ssh push ok",
+            "created_at": "2026-05-04T00:00:00+09:00"
+          }
+          EOF
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Push test JSON to EC2
+        run: |
+          scp -i ~/.ssh/ec2_key out/*.json \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/ec2-user/tradingbot/data/research/incoming/
+
+      - name: Move JSON atomically
+        run: |
+          ssh -i ~/.ssh/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "mv /home/ec2-user/tradingbot/data/research/incoming/*.json /home/ec2-user/tradingbot/data/research/"
