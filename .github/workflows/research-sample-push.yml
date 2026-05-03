@@ -1,0 +1,114 @@
+name: Research Sample Push (HMAC signed)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sample-push:
+    runs-on: ubuntu-latest
+
+    env:
+      EC2_INCOMING: /home/ec2-user/tradingbot/data/research/incoming
+      EC2_FINAL: /home/ec2-user/tradingbot/data/research
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate signed sample JSONs
+        env:
+          RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
+        run: |
+          if [ -z "$RESEARCH_HMAC_KEY" ]; then
+            echo "::error::RESEARCH_HMAC_KEY secret 미등록"
+            exit 1
+          fi
+          python scripts/generate_sample_signals.py
+          ls -la out/
+
+      - name: Verify HMAC locally before push
+        env:
+          RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
+        run: |
+          python - <<'PY'
+          import glob, hmac, hashlib, json, os, sys
+          key = os.environ["RESEARCH_HMAC_KEY"].encode()
+          fails = []
+          for f in sorted(glob.glob("out/*.json")):
+              p = json.load(open(f, encoding="utf-8"))
+              if p.get("signed_by") != "research_v1" or "sha256_hmac" not in p or "data" not in p:
+                  fails.append((f, "envelope shape"))
+                  continue
+              canon = json.dumps(p["data"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+              expected = hmac.new(key, canon, hashlib.sha256).hexdigest()
+              if expected != p["sha256_hmac"]:
+                  fails.append((f, "hmac mismatch"))
+                  continue
+              print(f"[ok] {f}  hmac={p['sha256_hmac'][:16]}...")
+          if fails:
+              for f, why in fails:
+                  print(f"::error::{f}: {why}")
+              sys.exit(1)
+          PY
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Ensure EC2 directories exist
+        run: |
+          ssh -i ~/.ssh/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "mkdir -p '${EC2_INCOMING}' '${EC2_FINAL}'"
+
+      - name: SCP signed JSONs to EC2 incoming
+        run: |
+          scp -i ~/.ssh/ec2_key out/*.json \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${EC2_INCOMING}/
+
+      - name: Atomic move incoming -> final
+        run: |
+          ssh -i ~/.ssh/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "mv ${EC2_INCOMING}/*.json ${EC2_FINAL}/"
+
+      - name: Verify arrival on EC2
+        run: |
+          EXPECTED_FILES=$(ls out/ | sort)
+          echo "expected:"
+          echo "$EXPECTED_FILES"
+
+          REMOTE_LIST=$(ssh -i ~/.ssh/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "ls -1 ${EC2_FINAL}/*.json 2>/dev/null | xargs -n1 basename | sort")
+          echo "remote (final):"
+          echo "$REMOTE_LIST"
+
+          MISSING=0
+          for f in $EXPECTED_FILES; do
+            if ! echo "$REMOTE_LIST" | grep -qx "$f"; then
+              echo "::error::missing on EC2: $f"
+              MISSING=1
+            fi
+          done
+
+          INCOMING_LEFT=$(ssh -i ~/.ssh/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "ls -1 ${EC2_INCOMING}/*.json 2>/dev/null | wc -l")
+          if [ "$INCOMING_LEFT" != "0" ]; then
+            echo "::error::incoming/ 에 파일 잔존 ($INCOMING_LEFT) — atomic mv 미완료"
+            MISSING=1
+          fi
+
+          if [ "$MISSING" != "0" ]; then
+            exit 1
+          fi
+          echo "[ok] 모든 샘플 JSON EC2 final 도착 확인"
