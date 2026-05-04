@@ -26,6 +26,8 @@ jobs:
 
     env:
       PYTHONPATH: ${{ github.workspace }}
+      KRX_ID: ${{ secrets.KRX_ID }}
+      KRX_PW: ${{ secrets.KRX_PW }}
       BACKTEST_LOOKBACK_YEARS: ${{ github.event.inputs.lookback_years || '5' }}
       BACKTEST_UNIVERSE_TOP_N: ${{ github.event.inputs.universe_top_n || '50' }}
       BACKTEST_MAX_HOLDINGS: ${{ github.event.inputs.max_holdings || '5' }}

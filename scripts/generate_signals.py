@@ -172,15 +172,6 @@ def _dart_filters(
     return out
 
 
-def _index_change(idx: dict[str, dict[str, Any]], name: str) -> float:
-    p = idx.get(name) or {}
-    val = p.get("bstp_nmix_prdy_ctrt") or p.get("prdy_ctrt") or 0
-    try:
-        return float(val)
-    except Exception:
-        return 0.0
-
-
 def main() -> int:
     key = os.environ.get("RESEARCH_HMAC_KEY", "")
     if not key:
@@ -267,13 +258,13 @@ def main() -> int:
     buy_payload = {"date": today_str, "signals": signals}
     _write_signed(OUT_DIR / f"buy_signals_{today_str}.json", buy_payload, key)
 
-    # macro
-    idx = _kis_indices_safe()
+    # macro (KRX 기반, KIS 무관)
+    macro_ind = _krx_macro_indicators()
     macro_payload = macro_brief.generate(
-        kospi_change=_index_change(idx, "KOSPI"),
-        kosdaq_change=_index_change(idx, "KOSDAQ"),
+        kospi_change=macro_ind["kospi_change"],
+        kosdaq_change=macro_ind["kosdaq_change"],
         usd_krw=0.0,
-        foreign_kospi_net=0.0,
+        foreign_kospi_net=macro_ind["foreign_kospi_net"],
         claude_opinion_short="자동 생성 (지표 일부 미수집)",
     )
     _write_signed(OUT_DIR / f"macro_status_{today_str}.json", macro_payload, key)

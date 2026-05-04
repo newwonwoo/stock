@@ -19,6 +19,8 @@ jobs:
       KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
       KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
       RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
+      KRX_ID: ${{ secrets.KRX_ID }}
+      KRX_PW: ${{ secrets.KRX_PW }}
       PYTHONPATH: ${{ github.workspace }}
 
     steps:
