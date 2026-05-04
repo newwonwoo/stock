@@ -63,13 +63,49 @@ def fetch_market_cap(d: date | None = None, market: str = "ALL") -> pd.DataFrame
     return df
 
 
+def _universe_via_fdr(min_cap: int) -> list[TickerInfo]:
+    """FinanceDataReader fallback. naver/yahoo 스크레이프 → KRX 인증 wall 무관."""
+    try:
+        import FinanceDataReader as fdr
+    except Exception as e:
+        log.info(f"FDR import 실패: {e}")
+        return []
+    out: list[TickerInfo] = []
+    for sym, market in (("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")):
+        try:
+            df = fdr.StockListing(sym)
+        except Exception as e:
+            log.info(f"FDR StockListing({sym}) 실패: {e}")
+            continue
+        if df is None or df.empty:
+            continue
+        cap_col = next((c for c in df.columns if c in ("Marcap", "MarketCap", "시가총액")), None)
+        code_col = next((c for c in df.columns if c in ("Code", "Symbol", "code")), None)
+        name_col = next((c for c in df.columns if c in ("Name", "name", "종목명")), None)
+        if not cap_col or not code_col:
+            log.info(f"FDR {sym} 컬럼 매칭 실패 ({df.columns.tolist()})")
+            continue
+        big = df[df[cap_col].fillna(0) >= min_cap]
+        for _, row in big.iterrows():
+            out.append(
+                TickerInfo(
+                    code=str(row[code_col]).zfill(6),
+                    name=str(row[name_col]) if name_col else str(row[code_col]),
+                    market=market,
+                    market_cap=int(row[cap_col]),
+                )
+            )
+    log.info(f"FDR universe ≥ {min_cap:,}: {len(out)}")
+    return out
+
+
 def fetch_universe_by_market_cap(
     min_cap: int = config.MARKET_CAP_MIN,
     d: date | None = None,
 ) -> list[TickerInfo]:
     """시총 ≥ min_cap 종목 universe. KOSPI + KOSDAQ 모두.
 
-    KRX 측 일시적 오류 / 인증 wall 이면 빈 list 반환 (호출자가 fallback).
+    pykrx 우선 → 실패 시 FDR fallback → 둘 다 실패 시 빈 list (호출자가 moat_whitelist).
     """
     target = _resolve_date(d)
     out: list[TickerInfo] = []
@@ -96,21 +132,45 @@ def fetch_universe_by_market_cap(
                     market_cap=int(row["시가총액"]),
                 )
             )
+
+    if not out:
+        log.info("pykrx universe 비어있음 — FDR fallback 시도")
+        out = _universe_via_fdr(min_cap)
     log.info(f"universe ≥ {min_cap:,}: {len(out)} tickers ({target})")
     return out
 
 
+def _ohlcv_via_fdr(code: str, days: int, end: date) -> pd.DataFrame:
+    """FDR fallback. naver finance OHLCV → 한국 컬럼명으로 normalize."""
+    try:
+        import FinanceDataReader as fdr
+    except Exception:
+        return pd.DataFrame()
+    start = end - timedelta(days=days * 2 + 10)
+    try:
+        df = fdr.DataReader(code, start.isoformat(), end.isoformat())
+    except Exception as e:
+        log.info(f"FDR OHLCV 실패 {code}: {e}")
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame()
+    # FDR 컬럼: Open/High/Low/Close/Volume → pykrx 한글 컬럼으로 통일
+    rename = {"Open": "시가", "High": "고가", "Low": "저가", "Close": "종가", "Volume": "거래량"}
+    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+    return df.tail(days)
+
+
 def fetch_ohlcv(code: str, days: int = 60, d: date | None = None) -> pd.DataFrame:
-    """code 의 최근 days 영업일 OHLCV. KRX 실패 시 빈 DataFrame."""
+    """code 의 최근 days 영업일 OHLCV. pykrx 실패 시 FDR fallback."""
     end = _resolve_date(d)
     start = end - timedelta(days=days * 2 + 10)  # 휴일 여유
     try:
         df = pykrx_stock.get_market_ohlcv_by_date(fmt_compact(start), fmt_compact(end), code)
     except Exception as e:
-        log.info(f"KRX OHLCV 실패 {code}: {e}")
-        return pd.DataFrame()
-    if df is None:
-        return pd.DataFrame()
+        log.info(f"KRX OHLCV 실패 {code} → FDR 시도: {e}")
+        return _ohlcv_via_fdr(code, days, end)
+    if df is None or df.empty:
+        return _ohlcv_via_fdr(code, days, end)
     return df.tail(days)
 
 
@@ -188,6 +248,31 @@ def fetch_foreign_ownership(code: str, days: int = 30, d: date | None = None) ->
     return df.tail(days)
 
 
+def _index_change_via_fdr(fdr_symbol: str) -> float:
+    """FDR fallback. KS11=KOSPI, KQ11=KOSDAQ."""
+    try:
+        import FinanceDataReader as fdr
+    except Exception:
+        return 0.0
+    end = _resolve_date(None)
+    start = end - timedelta(days=15)
+    try:
+        df = fdr.DataReader(fdr_symbol, start.isoformat(), end.isoformat())
+    except Exception as e:
+        log.info(f"FDR index {fdr_symbol} 실패: {e}")
+        return 0.0
+    if df is None or len(df) < 2 or "Close" not in df.columns:
+        return 0.0
+    last = float(df["Close"].iloc[-1])
+    prev = float(df["Close"].iloc[-2])
+    if prev <= 0:
+        return 0.0
+    return round((last - prev) / prev * 100, 2)
+
+
+_INDEX_FDR_MAP = {"1001": "KS11", "2001": "KQ11"}
+
+
 def fetch_index_change(index_ticker: str, d: date | None = None) -> float:
     """지수 ticker 의 직전 영업일 대비 변화율 (%). 1001=KOSPI, 2001=KOSDAQ."""
     end = _resolve_date(d)
@@ -195,10 +280,12 @@ def fetch_index_change(index_ticker: str, d: date | None = None) -> float:
     try:
         df = pykrx_stock.get_index_ohlcv_by_date(fmt_compact(start), fmt_compact(end), index_ticker)
     except Exception as e:
-        log.info(f"index ohlcv 실패 {index_ticker}: {e}")
-        return 0.0
+        log.info(f"index ohlcv 실패 {index_ticker} → FDR 시도: {e}")
+        fdr_sym = _INDEX_FDR_MAP.get(index_ticker)
+        return _index_change_via_fdr(fdr_sym) if fdr_sym else 0.0
     if df is None or len(df) < 2:
-        return 0.0
+        fdr_sym = _INDEX_FDR_MAP.get(index_ticker)
+        return _index_change_via_fdr(fdr_sym) if fdr_sym else 0.0
     last = float(df["종가"].iloc[-1])
     prev = float(df["종가"].iloc[-2])
     if prev <= 0:
