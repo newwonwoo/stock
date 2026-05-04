@@ -1,5 +1,7 @@
 # 봇 측 fix 요청 — swing endpoint Basic Auth 우회
 
+> ✅ **PATCHED** (2026-05-05) — 봇 측 commit `f7d6954`. 검증: `PATCH_REPORT_swing_auth_B65.md` 참조.
+>
 > 작성: 2026-05-05 (리서치 측 첫 push 검증 중 발견).
 > 대상 repo: TradeBot (EC2 `/home/ec2-user/trading-bot/`).
 > 우선순위: **차단 (blocking)** — 본 fix 없으면 리서치 측 `bot_dashboard.py`
