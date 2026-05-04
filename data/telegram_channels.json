@@ -12,10 +12,33 @@
       "name":         "표시용 한글명 (선택). core_analyst 일 경우 운영자 이름",
       "since_date":   "이 날짜 이후 메시지만 fetch (선택, ISO 8601). 미지정 시 cursor 부터"
     },
-    "usage": "이 파일 수정 후 commit + push. 다음 daily.yml run 부터 적용.",
+    "usage": "이 파일 수정 후 commit + push. 다음 daily.yml run 부터 적용. 본인이 듣는 채널만 남기고 나머지 삭제 권장 (불필요한 noise 차단).",
     "core_analysts_ref": "data/core_analysts.json 의 명단과 매칭됨 (실 운영자 검증용)"
   },
   "channels": [
-    {"username": "butler_works", "type": "broker_summary", "name": "버틀러웍스 (예시 - 실제 채널로 교체)"}
+    {
+      "username": "butler_works",
+      "type": "broker_summary",
+      "name": "버틀러 - 증권사 리포트 요약",
+      "_url": "https://t.me/butler_works"
+    },
+    {
+      "username": "companyreport",
+      "type": "broker_summary",
+      "name": "[주식] 증권사 리포트",
+      "_url": "https://t.me/companyreport"
+    },
+    {
+      "username": "repostory123",
+      "type": "broker_summary",
+      "name": "증권사 신규 리포트 자동 알림",
+      "_url": "https://t.me/repostory123"
+    },
+    {
+      "username": "krmarket76",
+      "type": "core_analyst",
+      "name": "염승환 (LS증권 前 이베스트)",
+      "_url": "https://t.me/krmarket76"
+    }
   ]
 }
