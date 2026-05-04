@@ -1,0 +1,21 @@
+[원우 아빠 월간 백테스트 — 2026-05]
+
+지난 5년 성과 (KRX 모멘텀 3필터 MVP)
+  CAGR  : 14.2%
+  Sharpe: 1.18
+  MDD   : -22.4%
+  알파  : KOSPI 대비 +6.8%pt
+
+지난달 추천 4주 평균: +4.7% / 승률 65%
+
+화이트리스트: 현재 8종목
+  변경 검토 후보:
+    - 005930 삼성전자  (CAGR 기여 +2.1%pt) → 유지
+    - 207940 삼성바이오로직스  (CAGR 기여 -0.9%pt) → 제외 검토
+
+⚠️  본 백테스트는 KRX 기반 3필터 (technical + flow + credit_short) 만
+    사용. DART 의존 4필터 (재무추세/건전성/마진/NPS) 미포함.
+
+전체 리포트: GitHub Actions artifact `backtest-{run_id}`
+
+— Claude
