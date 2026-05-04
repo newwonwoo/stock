@@ -67,17 +67,31 @@ def fetch_universe_by_market_cap(
     min_cap: int = config.MARKET_CAP_MIN,
     d: date | None = None,
 ) -> list[TickerInfo]:
-    """시총 ≥ min_cap 종목 universe. KOSPI + KOSDAQ 모두."""
+    """시총 ≥ min_cap 종목 universe. KOSPI + KOSDAQ 모두.
+
+    KRX 측 일시적 오류 / 인증 wall 이면 빈 list 반환 (호출자가 fallback).
+    """
     target = _resolve_date(d)
     out: list[TickerInfo] = []
     for market in ("KOSPI", "KOSDAQ"):
-        df = pykrx_stock.get_market_cap_by_ticker(fmt_compact(target), market=market)
+        try:
+            df = pykrx_stock.get_market_cap_by_ticker(fmt_compact(target), market=market)
+        except Exception as e:
+            log.info(f"KRX market_cap fetch 실패 ({market}, {target}): {e}")
+            continue
+        if df is None or df.empty or "시가총액" not in df.columns:
+            log.info(f"KRX market_cap 빈/이상 응답 ({market}, {target})")
+            continue
         big = df[df["시가총액"] >= min_cap]
         for code, row in big.iterrows():
+            try:
+                name = pykrx_stock.get_market_ticker_name(code)
+            except Exception:
+                name = str(code)
             out.append(
                 TickerInfo(
                     code=str(code),
-                    name=pykrx_stock.get_market_ticker_name(code),
+                    name=name,
                     market=market,
                     market_cap=int(row["시가총액"]),
                 )

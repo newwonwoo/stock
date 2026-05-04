@@ -197,7 +197,18 @@ def main() -> int:
     universe = universe[:universe_limit]
     log.info(f"universe limited to top {len(universe)} by market cap")
 
-    short_top = krx_fetcher.fetch_short_top10()
+    # KRX 실패 → moat_whitelist 종목으로 fallback (파이프라인 무중단)
+    if not universe:
+        wl = sorted(_whitelist_codes())
+        log.info(f"KRX universe 비어있음 — moat_whitelist {len(wl)}개로 fallback")
+        from src.collectors.krx_fetcher import TickerInfo
+        universe = [TickerInfo(code=c, name=c, market="KOSPI", market_cap=0) for c in wl]
+
+    try:
+        short_top = krx_fetcher.fetch_short_top10()
+    except Exception as e:
+        log.info(f"short_top10 실패 (skip): {e}")
+        short_top = {"KOSPI": [], "KOSDAQ": []}
     short_top_codes = {it["code"] for items in short_top.values() for it in items}
 
     tg_msgs = _telegram_messages()
