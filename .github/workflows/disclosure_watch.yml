@@ -17,8 +17,8 @@ jobs:
       RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
       BOT_DASHBOARD_URL: ${{ secrets.BOT_DASHBOARD_URL }}
       SWING_API_TOKEN: ${{ secrets.SWING_API_TOKEN }}
-      EC2_INCOMING: /home/ec2-user/tradingbot/data/research/incoming
-      EC2_FINAL: /home/ec2-user/tradingbot/data/research
+      EC2_INCOMING: /home/ec2-user/trading-bot/data/research/incoming
+      EC2_FINAL: /home/ec2-user/trading-bot/data/research
       PYTHONPATH: ${{ github.workspace }}
 
     steps:

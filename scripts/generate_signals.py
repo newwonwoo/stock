@@ -76,15 +76,22 @@ def _telegram_messages() -> list[dict[str, Any]]:
         return []
 
 
-def _kis_indices_safe() -> dict[str, Any]:
-    if not (config.KIS_APP_KEY and config.KIS_APP_SECRET):
-        return {}
+def _krx_macro_indicators() -> dict[str, float]:
+    """KOSPI / KOSDAQ 변화율 + 외인 순매수. KRX (pykrx) 만 사용. KIS 의존 X."""
+    out: dict[str, float] = {"kospi_change": 0.0, "kosdaq_change": 0.0, "foreign_kospi_net": 0.0}
     try:
-        from src.collectors.kis_fetcher import KisFetcher
-        return KisFetcher().fetch_market_indices()
+        out["kospi_change"] = krx_fetcher.fetch_index_change("1001")
     except Exception as e:
-        log.info(f"KIS indices skip: {e}")
-        return {}
+        log.info(f"KOSPI index 실패: {e}")
+    try:
+        out["kosdaq_change"] = krx_fetcher.fetch_index_change("2001")
+    except Exception as e:
+        log.info(f"KOSDAQ index 실패: {e}")
+    try:
+        out["foreign_kospi_net"] = krx_fetcher.fetch_kospi_foreign_net()
+    except Exception as e:
+        log.info(f"KOSPI 외인순매수 실패: {e}")
+    return out
 
 
 def _init_dart() -> tuple[Any, dict[str, str]]:

@@ -24,9 +24,9 @@ INTEGRATION.md 의 데이터 schema (buy_signals / sell_signals / blacklist / ma
 
 리서치 GitHub Actions (`daily.yml`) 마지막 step:
 ```bash
-scp -r out/*.json $EC2_HOST:/home/user/tradingbot/data/research/incoming/
-ssh $EC2_HOST "mv /home/user/tradingbot/data/research/incoming/*.json \
-                  /home/user/tradingbot/data/research/"
+scp -r out/*.json $EC2_HOST:/home/user/trading-bot/data/research/incoming/
+ssh $EC2_HOST "mv /home/user/trading-bot/data/research/incoming/*.json \
+                  /home/user/trading-bot/data/research/"
 ```
 
 원자성: incoming → final dir mv 는 same-FS rename = atomic. 봇 polling 이 partial JSON 못 읽음.

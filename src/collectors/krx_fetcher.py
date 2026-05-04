@@ -145,3 +145,43 @@ def fetch_foreign_ownership(code: str, days: int = 30, d: date | None = None) ->
         fmt_compact(start), fmt_compact(end), code
     )
     return df.tail(days)
+
+
+def fetch_index_change(index_ticker: str, d: date | None = None) -> float:
+    """지수 ticker 의 직전 영업일 대비 변화율 (%). 1001=KOSPI, 2001=KOSDAQ."""
+    end = _resolve_date(d)
+    start = end - timedelta(days=15)
+    try:
+        df = pykrx_stock.get_index_ohlcv_by_date(fmt_compact(start), fmt_compact(end), index_ticker)
+    except Exception as e:
+        log.info(f"index ohlcv 실패 {index_ticker}: {e}")
+        return 0.0
+    if df is None or len(df) < 2:
+        return 0.0
+    last = float(df["종가"].iloc[-1])
+    prev = float(df["종가"].iloc[-2])
+    if prev <= 0:
+        return 0.0
+    return round((last - prev) / prev * 100, 2)
+
+
+def fetch_kospi_foreign_net(d: date | None = None) -> float:
+    """KOSPI 시장 전체 외인 순매수 (당일, 원). 미지원 시 0."""
+    end = _resolve_date(d)
+    fn = getattr(pykrx_stock, "get_market_trading_value_by_investor", None)
+    if fn is None:
+        return 0.0
+    try:
+        df = fn(fmt_compact(end), fmt_compact(end), "KOSPI")
+    except Exception as e:
+        log.info(f"market trading value 실패: {e}")
+        return 0.0
+    if df is None or df.empty:
+        return 0.0
+    foreign_col = next((c for c in df.columns if "외국인" in c and "기타" not in c), None)
+    if not foreign_col:
+        return 0.0
+    try:
+        return float(df[foreign_col].sum())
+    except Exception:
+        return 0.0

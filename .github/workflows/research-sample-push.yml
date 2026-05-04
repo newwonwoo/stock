@@ -8,8 +8,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      EC2_INCOMING: /home/ec2-user/tradingbot/data/research/incoming
-      EC2_FINAL: /home/ec2-user/tradingbot/data/research
+      EC2_INCOMING: /home/ec2-user/trading-bot/data/research/incoming
+      EC2_FINAL: /home/ec2-user/trading-bot/data/research
 
     steps:
       - name: Checkout

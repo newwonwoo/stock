@@ -2,12 +2,12 @@
 
 > 매일 07:30 KST. PlayMCP 카카오톡 MCP 로 "나와의 채팅방" 발송.
 > Claude.ai 가 GitHub Actions artifact (전일 daily.yml run) 또는 EC2 의
-> `/home/ec2-user/tradingbot/data/research/` 의 최신 파일을 읽어 작성.
+> `/home/ec2-user/trading-bot/data/research/` 의 최신 파일을 읽어 작성.
 
 ## 입력 위치 (Claude.ai 가 읽을 파일)
 
 GitHub repo `newwonwoo/stock` 의 가장 최신 `out/` artifact 또는 (선호)
-EC2 SSH 접근 가능 시 `/home/ec2-user/tradingbot/data/research/`:
+EC2 SSH 접근 가능 시 `/home/ec2-user/trading-bot/data/research/`:
 - `macro_status_{YYYY-MM-DD}.json` — 매크로 지표
 - `hot_sectors_{YYYY-MM-DD}.json` — 핫섹터/콜드섹터
 - `buy_signals_{YYYY-MM-DD}.json` — STRONG_BUY 종목
