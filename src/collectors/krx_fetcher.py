@@ -101,63 +101,90 @@ def fetch_universe_by_market_cap(
 
 
 def fetch_ohlcv(code: str, days: int = 60, d: date | None = None) -> pd.DataFrame:
-    """code 의 최근 days 영업일 OHLCV."""
+    """code 의 최근 days 영업일 OHLCV. KRX 실패 시 빈 DataFrame."""
     end = _resolve_date(d)
     start = end - timedelta(days=days * 2 + 10)  # 휴일 여유
-    df = pykrx_stock.get_market_ohlcv_by_date(fmt_compact(start), fmt_compact(end), code)
+    try:
+        df = pykrx_stock.get_market_ohlcv_by_date(fmt_compact(start), fmt_compact(end), code)
+    except Exception as e:
+        log.info(f"KRX OHLCV 실패 {code}: {e}")
+        return pd.DataFrame()
+    if df is None:
+        return pd.DataFrame()
     return df.tail(days)
 
 
 def fetch_credit_balance(d: date | None = None) -> pd.DataFrame:
-    """종목별 신용잔고. KRX 신용대주 잔고."""
+    """종목별 신용잔고. KRX 신용대주 잔고. 실패 시 빈 DataFrame."""
     target = _resolve_date(d)
-    # pykrx: stock.get_shorting_balance_by_ticker / get_market_credit_balance 패턴
-    # API 명은 버전마다 다름. 우선 ticker 별 잔고 시도.
     fn = getattr(pykrx_stock, "get_shorting_balance_by_ticker", None)
     if fn is None:
-        raise RuntimeError("pykrx 에 get_shorting_balance_by_ticker 없음. 버전 확인 필요")
-    df = fn(fmt_compact(target))
-    return df
+        log.info("pykrx 에 get_shorting_balance_by_ticker 없음")
+        return pd.DataFrame()
+    try:
+        return fn(fmt_compact(target)) or pd.DataFrame()
+    except Exception as e:
+        log.info(f"KRX credit_balance 실패: {e}")
+        return pd.DataFrame()
 
 
 def fetch_short_top10(d: date | None = None) -> dict[str, list[dict[str, Any]]]:
-    """공매도 거래대금 Top 10 (KOSPI/KOSDAQ 각각)."""
+    """공매도 거래대금 Top 10 (KOSPI/KOSDAQ 각각). 실패 시 빈 dict."""
     target = _resolve_date(d)
-    out: dict[str, list[dict[str, Any]]] = {}
+    out: dict[str, list[dict[str, Any]]] = {"KOSPI": [], "KOSDAQ": []}
     for market in ("KOSPI", "KOSDAQ"):
-        df = pykrx_stock.get_shorting_value_by_ticker(fmt_compact(target), market=market)
-        # 거래대금 컬럼 이름은 pykrx 버전에 따라 "거래대금" 또는 "공매도거래대금".
-        col = "거래대금" if "거래대금" in df.columns else df.columns[0]
+        try:
+            df = pykrx_stock.get_shorting_value_by_ticker(fmt_compact(target), market=market)
+        except Exception as e:
+            log.info(f"KRX short_top10 실패 ({market}): {e}")
+            continue
+        if df is None or df.empty:
+            continue
+        col = "거래대금" if "거래대금" in df.columns else (df.columns[0] if len(df.columns) else None)
+        if col is None:
+            continue
         top = df.sort_values(col, ascending=False).head(10)
-        out[market] = [
-            {
-                "code": str(code),
-                "name": pykrx_stock.get_market_ticker_name(code),
-                "short_value": int(row[col]),
-            }
-            for code, row in top.iterrows()
-        ]
+        rows: list[dict[str, Any]] = []
+        for code, row in top.iterrows():
+            try:
+                name = pykrx_stock.get_market_ticker_name(code)
+            except Exception:
+                name = str(code)
+            rows.append({"code": str(code), "name": name, "short_value": int(row[col])})
+        out[market] = rows
     log.info(f"short_top10: KOSPI={len(out.get('KOSPI', []))} KOSDAQ={len(out.get('KOSDAQ', []))}")
     return out
 
 
 def fetch_investor_flow(code: str, days: int = 7, d: date | None = None) -> pd.DataFrame:
-    """외인/기관/개인 일별 순매수 (단위: 원)."""
+    """외인/기관/개인 일별 순매수 (단위: 원). 실패 시 빈 DataFrame."""
     end = _resolve_date(d)
     start = end - timedelta(days=days * 2 + 10)
-    df = pykrx_stock.get_market_trading_value_by_date(
-        fmt_compact(start), fmt_compact(end), code
-    )
+    try:
+        df = pykrx_stock.get_market_trading_value_by_date(
+            fmt_compact(start), fmt_compact(end), code
+        )
+    except Exception as e:
+        log.info(f"KRX investor_flow 실패 {code}: {e}")
+        return pd.DataFrame()
+    if df is None:
+        return pd.DataFrame()
     return df.tail(days)
 
 
 def fetch_foreign_ownership(code: str, days: int = 30, d: date | None = None) -> pd.DataFrame:
-    """외인 보유율 (%) 일별 추이."""
+    """외인 보유율 (%) 일별 추이. 실패 시 빈 DataFrame."""
     end = _resolve_date(d)
     start = end - timedelta(days=days * 2 + 10)
-    df = pykrx_stock.get_exhaustion_rates_of_foreign_investor(
-        fmt_compact(start), fmt_compact(end), code
-    )
+    try:
+        df = pykrx_stock.get_exhaustion_rates_of_foreign_investor(
+            fmt_compact(start), fmt_compact(end), code
+        )
+    except Exception as e:
+        log.info(f"KRX foreign_ownership 실패 {code}: {e}")
+        return pd.DataFrame()
+    if df is None:
+        return pd.DataFrame()
     return df.tail(days)
 
 

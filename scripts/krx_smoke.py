@@ -22,18 +22,28 @@ from src.collectors.krx_fetcher import (
 
 def main() -> int:
     print("[1] universe ≥5천억 ...")
-    uni = fetch_universe_by_market_cap()
+    try:
+        uni = fetch_universe_by_market_cap()
+    except Exception as e:
+        print(f"  FAIL (continue): {e}")
+        uni = []
     print(f"  total={len(uni)}")
     print(f"  sample top3: {[(t.code, t.name, t.market_cap) for t in uni[:3]]}")
 
     print("[2] 005930 OHLCV 30일 ...")
-    df = fetch_ohlcv("005930", days=30)
-    print(f"  rows={len(df)} last_close={df['종가'].iloc[-1] if len(df) else 'n/a'}")
+    try:
+        df = fetch_ohlcv("005930", days=30)
+        print(f"  rows={len(df)} last_close={df['종가'].iloc[-1] if len(df) else 'n/a'}")
+    except Exception as e:
+        print(f"  FAIL (continue): {e}")
 
     print("[3] short_top10 ...")
-    s = fetch_short_top10()
-    for mkt, items in s.items():
-        print(f"  {mkt}: {[(it['code'], it['name']) for it in items[:3]]}")
+    try:
+        s = fetch_short_top10()
+        for mkt, items in s.items():
+            print(f"  {mkt}: {[(it['code'], it['name']) for it in items[:3]]}")
+    except Exception as e:
+        print(f"  FAIL (continue): {e}")
 
     print("[done]")
     return 0
