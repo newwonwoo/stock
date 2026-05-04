@@ -1,0 +1,125 @@
+name: Disclosure Watch (sell_signals)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 장중 30분 간격 (KST 09:00 ~ 16:00 = UTC 00:00 ~ 07:00, 평일).
+    # GitHub cron 은 분 단위 5/30 분만 권장. 0/30 분 마다.
+    - cron: "0,30 0-7 * * 1-5"
+
+jobs:
+  sell-signals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      RESEARCH_HMAC_KEY: ${{ secrets.RESEARCH_HMAC_KEY }}
+      BOT_DASHBOARD_URL: ${{ secrets.BOT_DASHBOARD_URL }}
+      SWING_API_TOKEN: ${{ secrets.SWING_API_TOKEN }}
+      EC2_INCOMING: /home/ec2-user/tradingbot/data/research/incoming
+      EC2_FINAL: /home/ec2-user/tradingbot/data/research
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore processed cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/sell_signals_processed.json
+          key: sell-processed-${{ github.run_id }}
+          restore-keys: |
+            sell-processed-
+
+      - name: Restore DART corp_code cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/dart_corp_codes.json
+          key: dart-corp-${{ github.run_id }}
+          restore-keys: |
+            dart-corp-
+
+      - name: Restore CB/BW tracker
+        uses: actions/cache@v4
+        with:
+          path: .cache/cb_tracker.json
+          key: cb-tracker-${{ github.run_id }}
+          restore-keys: |
+            cb-tracker-
+
+      - name: Generate sell signals
+        if: ${{ env.DART_API_KEY != '' && env.RESEARCH_HMAC_KEY != '' }}
+        run: python scripts/generate_sell_signals.py
+
+      - name: Verify HMAC envelopes
+        if: ${{ env.RESEARCH_HMAC_KEY != '' }}
+        run: |
+          shopt -s nullglob
+          files=(out/sell_signal_*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "[info] no new sell signals"
+            exit 0
+          fi
+          python - <<'PY'
+          import glob, hmac, hashlib, json, os, sys
+          key = os.environ["RESEARCH_HMAC_KEY"].encode()
+          fails = []
+          for f in sorted(glob.glob("out/sell_signal_*.json")):
+              p = json.load(open(f, encoding="utf-8"))
+              if p.get("signed_by") != "research_v1" or "sha256_hmac" not in p or "data" not in p:
+                  fails.append((f, "envelope shape")); continue
+              canon = json.dumps(p["data"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+              if hmac.new(key, canon, hashlib.sha256).hexdigest() != p["sha256_hmac"]:
+                  fails.append((f, "hmac mismatch")); continue
+              print(f"[ok] {f}")
+          if fails:
+              for f, why in fails: print(f"::error::{f}: {why}")
+              sys.exit(1)
+          PY
+
+      - name: Prepare SSH key
+        if: ${{ env.RESEARCH_HMAC_KEY != '' }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Push sell signals (if any)
+        if: ${{ env.RESEARCH_HMAC_KEY != '' }}
+        run: |
+          shopt -s nullglob
+          files=(out/sell_signal_*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no sell signals to push"
+            exit 0
+          fi
+          ssh -i ~/.ssh/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "mkdir -p '${EC2_INCOMING}' '${EC2_FINAL}'"
+          scp -i ~/.ssh/ec2_key out/sell_signal_*.json \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${EC2_INCOMING}/
+          ssh -i ~/.ssh/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "mv ${EC2_INCOMING}/sell_signal_*.json ${EC2_FINAL}/"
+          echo "[ok] pushed ${#files[@]} sell signals"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sell-signals-${{ github.run_id }}
+          path: |
+            out/sell_signal_*.json
+            .cache/sell_signals_processed.json
+          if-no-files-found: ignore
+          retention-days: 14

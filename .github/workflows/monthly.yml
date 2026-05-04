@@ -1,0 +1,56 @@
+name: Monthly Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_years:
+        description: "Lookback years"
+        required: false
+        default: "5"
+      universe_top_n:
+        description: "Universe top N"
+        required: false
+        default: "50"
+      max_holdings:
+        description: "Max holdings"
+        required: false
+        default: "5"
+  schedule:
+    # 매월 1일 09:00 KST = 매월 1일 00:00 UTC
+    - cron: "0 0 1 * *"
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # pykrx 호출이 누적되어 무거움. 안전 마진 크게.
+
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      BACKTEST_LOOKBACK_YEARS: ${{ github.event.inputs.lookback_years || '5' }}
+      BACKTEST_UNIVERSE_TOP_N: ${{ github.event.inputs.universe_top_n || '50' }}
+      BACKTEST_MAX_HOLDINGS: ${{ github.event.inputs.max_holdings || '5' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run backtest
+        run: python scripts/run_backtest.py
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-${{ github.run_id }}
+          path: |
+            out/backtest_*.md
+            out/backtest_*.json
+          if-no-files-found: ignore
+          retention-days: 365

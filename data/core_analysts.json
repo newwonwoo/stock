@@ -1,0 +1,6 @@
+{
+  "_doc": "코어 애널리스트 명단. 텔레그램 채널 운영자만 등록. 매경/한경/FnGuide 베스트 애널 + 본인이 신뢰하는 분 위주. report_momentum 필터에서 author 매칭 가산점 부여 가능 (현재는 sentiment 만 사용, 향후 확장).",
+  "analysts": [
+    {"name": "예시", "broker": "예시증권", "telegram_channel": "butler_works", "specialty": "반도체"}
+  ]
+}

@@ -1,0 +1,10 @@
+requests>=2.31
+pandas>=2.1
+pykrx>=1.0.45
+pydantic>=2.5
+python-dotenv>=1.0
+openpyxl>=3.1
+reportlab>=4.0
+telethon>=1.34
+pytest>=8.0
+pyyaml>=6.0
