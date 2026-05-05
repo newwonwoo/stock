@@ -1,237 +1,641 @@
-# 카톡 알림 ↔ EC2 봇 상호 연계 명세서
+#!/usr/bin/env python3
+"""
+Kakao "나에게 보내기" sender — newwonwoo/stock 리서치 봇용.
 
-**작성:** 2026-05-05 Cowork 세션
-**대상:** EC2 봇 개발자 / 시스템 연계자
-**범위:** GitHub Actions 의 카톡 자기톡 발송 흐름과 EC2 봇이 받는 데이터 사이의 schema·계약·재사용 패턴 정리.
+사용:
+    python scripts/kakao_send.py {daily|weekly|monthly}
 
-## 1. 큰 그림 — 두 흐름이 평행
+GitHub Actions 의 마지막 step 에서 호출. out/ 의 JSON 산출물을 한국어
+메시지로 만들어 Kakao memo/default/send API 로 발송. PC 무관.
 
-```
-                  ┌─────────────────────┐
-                  │  GitHub Actions     │
-                  │  (server-side cron) │
-                  └─────────┬───────────┘
-                            │
-        ┌───────────────────┴───────────────────┐
-        │                                       │
-        ▼ (1) SCP signed JSONs                  ▼ (2) Kakao memo/default/send
-   ┌──────────┐                          ┌──────────────┐
-   │ EC2 BOT  │                          │ 사용자 카톡   │
-   │ /home/.. │                          │ 나와의 채팅  │
-   │ /research│                          └──────────────┘
-   └──────────┘
-   (자체 분석 + 봇 자체 알림 가능)
-```
+필수 env (= GitHub Secrets):
+    KAKAO_REST_API_KEY    — Kakao Developers 앱 REST API 키
+    KAKAO_REFRESH_TOKEN   — talk_message scope refresh_token
+    KAKAO_CLIENT_SECRET   — Client Secret 활성 ON 시 필수
+    RESEARCH_HMAC_KEY     — envelope HMAC 검증
 
-**(1)** 은 기존부터 있던 흐름 — 손 안 댐. 4개 envelope JSON 이 봇으로 SSH push.
-**(2)** 는 이번 세션에서 추가 — `scripts/kakao_send.py` 가 같은 산출물을 한국어 메시지로 만들어 사용자 카톡으로 발송.
+선택 env:
+    OUT_DIR    — 산출물 디렉터리 (기본 ./out)
+    DRY_RUN=1  — 실제 발송 안 하고 메시지 미리보기만
+"""
 
-두 흐름의 **데이터 소스가 동일**하기 때문에, 봇이 처리하는 종목과 사용자가 카톡으로 보는 종목이 일치합니다 (HMAC 서명까지 동일).
+from __future__ import annotations
 
-## 2. 입력 산출물 schema (봇·카톡 공용)
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import sys
+import urllib.parse
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-### 2.1 `buy_signals_{YYYY-MM-DD}.json` (envelope)
-```json
-{
-  "signed_by": "research_v1",
-  "sha256_hmac": "...",
-  "data": {
-    "signals": [
-      {
-        "code": "005930",
-        "name": "삼성전자",
-        "signal": "STRONG_BUY|BUY|HOLD|AVOID",
-        "score": 94,
-        "nine_filter": {
-          "financial_trend": "GREEN", "quant_health": "YELLOW",
-          "margin_diagnosis": "YELLOW", "moat": "GREEN",
-          "flow": "STAR", "credit_short": "GREEN",
-          "nps": "STAR", "technical": "GREEN", "report": "STAR"
-        },
-        "positive_signals": [
-          {"type": "NPS_NEW", "score": 15},
-          {"type": "STRONG_FLOW", "score": 8},
-          {"type": "ANALYST_TARGET_UP", "score": 10}
-        ],
-        "negative_signals": [
-          {"type": "SHORT_TOP10", "score": -20}
-        ],
-        "blocked": false,
-        "block_reasons": [],
-        "moving_averages": {"ma10": 62500, "ma15": 61000},
-        "valid_until": "2026-05-12",
-        "created_at": "2026-05-05T07:00:00+09:00"
-      }
-    ]
-  }
+KST = timezone(timedelta(hours=9))
+OUT_DIR = Path(os.environ.get("OUT_DIR", "out"))
+
+
+# ---------------------------- 공용 유틸 ----------------------------
+
+def kst_today() -> str:
+    return datetime.now(KST).strftime("%Y-%m-%d")
+
+
+def kst_yyyymm() -> str:
+    return datetime.now(KST).strftime("%Y-%m")
+
+
+def latest(pattern: str) -> Path | None:
+    candidates = sorted(OUT_DIR.glob(pattern))
+    return candidates[-1] if candidates else None
+
+
+def fmt_signed(n: float, places: int = 2) -> str:
+    sign = "+" if n >= 0 else ""
+    return f"{sign}{n:.{places}f}"
+
+
+def load_envelope(path: Path | None):
+    """envelope JSON 이면 HMAC 검증 후 data 반환. plain JSON 이면 그대로."""
+    if path is None or not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"[ERR] {path.name} JSON parse fail: {e}", file=sys.stderr)
+        return None
+    if not isinstance(raw, dict) or "data" not in raw:
+        return raw
+    data = raw["data"]
+    sig = raw.get("sha256_hmac", "") or ""
+    key = os.environ.get("RESEARCH_HMAC_KEY", "") or ""
+    if sig and key:
+        canonical = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        expected = hmac.new(key.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            print(f"[WARN] HMAC mismatch on {path.name}", file=sys.stderr)
+            if isinstance(data, dict):
+                data = dict(data)
+                data["__hmac_invalid"] = True
+    elif sig and not key:
+        print(f"[WARN] RESEARCH_HMAC_KEY 없음 — {path.name} HMAC 검증 스킵", file=sys.stderr)
+    return data
+
+
+# ---------------------------- 라벨 매핑 ----------------------------
+
+OVERALL_EMOJI = {
+    "BULL": "🟢", "GOOD": "🟢", "GREEN": "🟢",
+    "NEUTRAL": "🟡", "MIXED": "🟡", "YELLOW": "🟡",
+    "BEAR": "🔴", "BAD": "🔴", "RED": "🔴",
+    "PANIC": "🚨", "CRASH": "🚨", "ALERT": "🚨",
 }
-```
 
-**필드 정의:**
+# 9 필터 한국어 라벨 (src/analyzers/buy_signal_generator.py NINE_FILTER_KEYS 순서)
+# ① 재무 추세 (financial_trend)
+# ② 정량 건전성 (quant_health)
+# ③ 신용 진단 (margin_diagnosis)
+# ④ 해자 (moat_score)
+# ⑤ 수급 (flow_analysis)
+# ⑥ 신용·공매도 (credit_short)
+# ⑦ 국민연금 (nps_tracker)
+# ⑧ 기술적 (technical)
+# ⑨ 리포트 모멘텀 (report_momentum)
+FILTER_LABELS = {
+    "financial_trend": "재무",
+    "quant_health": "정량",
+    "margin_diagnosis": "진단",
+    "moat": "해자",
+    "flow": "수급",
+    "credit_short": "공매도",
+    "nps": "연금",
+    "technical": "기술",
+    "report": "리포트",
+}
+NINE_FILTER_ORDER = (
+    "financial_trend", "quant_health", "margin_diagnosis",
+    "moat", "flow", "credit_short", "nps",
+    "technical", "report",
+)
+# nine_filter dict 값이 영문 grade ("GREEN") 이거나 이모지 ("🟢") 둘 다 들어올 수 있음
+GRADE_ICON = {
+    "STAR": "⭐", "GREEN": "✓", "YELLOW": "△", "RED": "✗",
+    "⭐": "⭐", "🟢": "✓", "🟡": "△", "🔴": "✗",
+}
 
-| 필드 | 의미 | 봇 사용 |
-| --- | --- | --- |
-| `signal` | 4단계 권고: STRONG_BUY / BUY / HOLD / AVOID | 자동매매 트리거 기준 |
-| `score` | 0~100 가중평균 (9개 필터의 score × weight; report 가중 0.8, 나머지 1.0) | 종목 우선순위 정렬 |
-| `nine_filter` | 9개 필터별 4단계 등급 (RED/YELLOW/GREEN/STAR). 단, 일부 출력엔 이모지 (🔴🟡🟢⭐) 로 들어올 수 있음 — 봇은 둘 다 처리 권장 | 위험 점검 |
-| `positive_signals[]` | type+score (가중치). 같은 종목에 여러 개 가능 | 추가 상승 모멘텀 신호 |
-| `negative_signals[]` | type+score (음수). 보유 시 주의 | 매도/회피 시그널 |
-| `blocked` | true 면 즉시 매수 금지 | 자동매매 차단 조건 |
-| `moving_averages.ma10/ma15` | 최근 종가 기준 이동평균. 진입 가이드 | 손절·익절 기준선 |
+# positive_signals[].type 한국어 (buy_signal_generator._collect_positive)
+POSITIVE_LABELS = {
+    "NPS_NEW": "연금 신규편입",
+    "NPS_ADD": "연금 확대",
+    "ANALYST_TARGET_UP": "리포트 목표가↑",
+    "STRONG_FLOW": "외인+기관 매수",
+}
+NEGATIVE_LABELS = {
+    "NPS_REDUCE": "연금 축소/매도",
+    "SHORT_TOP10": "공매도 Top10",
+}
 
-### 2.2 `positive_signals[].type` 종류
-| type | 의미 | 점수 |
-| --- | --- | --- |
-| `NPS_NEW` | 국민연금 신규 편입 (이번 분기 처음 등장) | +15 |
-| `NPS_ADD` | 국민연금 보유 비중 0.5%p 이상 확대 | +15 |
-| `ANALYST_TARGET_UP` | 4주 내 코어 애널 리포트 STAR 등급 (목표가↑·매수의견) | +10 |
-| `STRONG_FLOW` | 외인+기관 동반 매수 비율 ≥ 70% | +8 |
 
-### 2.3 `negative_signals[].type` 종류
-| type | 의미 | 점수 |
-| --- | --- | --- |
-| `NPS_REDUCE` | 국민연금 축소대폭/전량매도 | -10 |
-| `SHORT_TOP10` | KOSPI/KOSDAQ 공매도 거래대금 Top10 | -20 (즉시 RED 등급) |
+def emoji_for(overall) -> str:
+    if not overall:
+        return "🟡"
+    s = str(overall).strip()
+    if s and ord(s[0]) > 127:
+        return s[:1]
+    return OVERALL_EMOJI.get(s.upper(), "🟡")
 
-### 2.4 9 필터 한국어 매핑 (봇 자체 알림에 사용 권장)
-| key | 한국어 | 분석 기준 |
-| --- | --- | --- |
-| `financial_trend` | 재무 추세 | 분기 매출/영익 4분기 추이 |
-| `quant_health` | 정량 건전성 | DSO/OCF·영익/부채/수주잔고 |
-| `margin_diagnosis` | 신용 진단 | (코드 미확인) |
-| `moat` | 해자 | 5년 ROE 안정성+EPS 성장+화이트리스트 |
-| `flow` | 수급 | 외인+기관 동반매수 일수 |
-| `credit_short` | 신용·공매도 | 신용비율+공매도 Top10 |
-| `nps` | 국민연금 | 분기 변동 (신규/확대/축소/매도) |
-| `technical` | 기술적 | (코드 미확인) |
-| `report` | 리포트 모멘텀 | 4주 내 코어 애널 매수의견 카운트 |
 
-### 2.5 `weekly_picks_{date}.json` (envelope 없음, plain JSON)
-```json
-{
-  "date": "2026-05-03",
-  "entry_reference_date": "2026-05-04",
-  "picks_count": 5,
-  "picks": [
-    {
-      "code": "...", "name": "...", "signal": "STRONG_BUY",
-      "score": 94, "nine_filter": {...}, "moving_averages": {...},
-      "reason_short": "NPS_NEW, STRONG_FLOW · 필터 7/9 통과",
-      "entry_date": "2026-05-04",
-      "entry_close": 62500
+def filter_sparkline(nine) -> str:
+    """nine_filter dict({key:grade}) → '✓재무 △정량 ⭐연금 ...' 한 줄."""
+    if not nine or not isinstance(nine, dict):
+        return ""
+    parts = []
+    for k in NINE_FILTER_ORDER:
+        v = nine.get(k)
+        if v is None:
+            continue
+        key = str(v).upper() if isinstance(v, str) and v.isascii() else str(v)
+        icon = GRADE_ICON.get(key, "·")
+        parts.append(f"{icon}{FILTER_LABELS.get(k, k)}")
+    return " ".join(parts)
+
+
+def positives_summary(pos, neg, max_items: int = 3):
+    """positive/negative_signals 배열 → 한국어 라벨 + 점수 리스트."""
+    pos_lines = []
+    for p in (pos or [])[:max_items]:
+        if not isinstance(p, dict):
+            continue
+        t = p.get("type", "")
+        s = p.get("score", 0)
+        label = POSITIVE_LABELS.get(t, t)
+        try:
+            sign = "+" if s >= 0 else ""
+            pos_lines.append(f"{label}({sign}{int(s)})")
+        except (TypeError, ValueError):
+            pos_lines.append(label)
+    neg_lines = []
+    for n in (neg or [])[:max_items]:
+        if not isinstance(n, dict):
+            continue
+        t = n.get("type", "")
+        s = n.get("score", 0)
+        label = NEGATIVE_LABELS.get(t, t)
+        try:
+            neg_lines.append(f"{label}({int(s)})")
+        except (TypeError, ValueError):
+            neg_lines.append(label)
+    return pos_lines, neg_lines
+
+
+def reason_short_humanize(reason_short: str) -> str:
+    """weekly_picks._summarize_reason 의 'NPS_NEW, STRONG_FLOW · 필터 7/9 통과' →
+    '연금 신규편입, 외인+기관 매수 · 필터 7/9 통과' 로 한국어화."""
+    if not reason_short:
+        return ""
+    out = reason_short
+    for k, v in POSITIVE_LABELS.items():
+        out = out.replace(k, v)
+    for k, v in NEGATIVE_LABELS.items():
+        out = out.replace(k, v)
+    return out
+
+
+# ---------------------------- 메시지 빌더 ----------------------------
+
+def daily_message() -> str:
+    today = kst_today()
+    macro = load_envelope(latest("macro_status_*.json"))
+    hot = load_envelope(latest("hot_sectors_*.json"))
+    buys = load_envelope(latest("buy_signals_*.json"))
+    blacklist = load_envelope(OUT_DIR / "blacklist_active.json")
+
+    lines = [f"[원우 아빠 매크로 — {today}]"]
+
+    if macro:
+        emoji = emoji_for(macro.get("overall"))
+        summary = macro.get("summary") or macro.get("comment") or macro.get("headline") or "시장 점검"
+        lines.append(f"{emoji} {summary}")
+        ind = macro.get("indicators") or {}
+        parts = []
+        try:
+            if ind.get("kospi_change") is not None:
+                parts.append(f"KOSPI {fmt_signed(float(ind['kospi_change']))}%")
+            if ind.get("foreign_kospi_net") is not None:
+                parts.append(f"외인 {fmt_signed(float(ind['foreign_kospi_net']), 0)}억")
+            if ind.get("usd_krw") is not None:
+                parts.append(f"USDKRW {int(float(ind['usd_krw']))}")
+        except (TypeError, ValueError):
+            pass
+        if parts:
+            lines.append("📊 " + " / ".join(parts))
+        if macro.get("__hmac_invalid"):
+            lines.append("⚠️ HMAC 검증 실패")
+    else:
+        lines.append("🟡 매크로 데이터 없음")
+
+    if hot:
+        h = [s.get("name") or s.get("sector") for s in (hot.get("hot_sectors") or [])]
+        h = [x for x in h if x][:2]
+        if h:
+            lines.append("🔥 핫섹터: " + ", ".join(h))
+
+    # 봇 시그널 (자동매매 트리거용 압축 라인) — STRONG_BUY/BUY 코드만 한 줄
+    if buys:
+        signals = buys.get("signals") or []
+        bot_sigs = [s for s in signals if s.get("signal") in ("STRONG_BUY", "BUY") and not s.get("blocked")]
+        if bot_sigs:
+            lines.append("")
+            lines.append("🤖 봇 시그널:")
+            line_parts = []
+            for s in bot_sigs[:5]:
+                line_parts.append(f"{s.get('code','')} {s.get('signal','')}")
+            lines.append("  " + " / ".join(line_parts))
+
+    lines.append("")
+    lines.append("💡 매수 추천 사유:")
+    if buys:
+        signals = buys.get("signals") or []
+        strong = [s for s in signals if s.get("signal") == "STRONG_BUY" and not s.get("blocked")]
+        if not strong:
+            lines.append("STRONG_BUY 없음 (관망)")
+        else:
+            for i, s in enumerate(strong[:2], 1):
+                name = s.get("name", "")
+                code = s.get("code", "")
+                score = s.get("score", "?")
+                lines.append(f"{i}. {name} ({code}) {score}점")
+                pos, neg = positives_summary(s.get("positive_signals"), s.get("negative_signals"))
+                if pos:
+                    lines.append("   👍 " + ", ".join(pos))
+                if neg:
+                    lines.append("   👎 " + ", ".join(neg))
+    else:
+        lines.append("데이터 없음")
+
+    if blacklist:
+        items = blacklist.get("blacklist") or []
+        if items:
+            lines.append("")
+            lines.append("🚫 차단:")
+            for b in items[:2]:
+                reasons = b.get("block_reasons") or [{}]
+                first = reasons[0]
+                desc = first.get("description") if isinstance(first, dict) else str(first)
+                lines.append(f"- {b.get('name','')} ({b.get('code','')}): {desc or '?'}")
+
+    lines.append("")
+    lines.append("— Claude")
+    return "\n".join(lines)
+
+
+def weekly_message() -> str:
+    """weekly_picks_*.json 은 envelope 없는 plain JSON.
+    schema (scripts/weekly_picks.py main()): {date, picks_count, picks:[
+        {code, name, signal, score, nine_filter, moving_averages,
+         reason_short, entry_date, entry_close}
+    ]}
+    positive_signals/negative_signals 는 picks 에 들어가지 않음 (reason_short 로 압축됨).
+    """
+    today = kst_today()
+    picks_data = load_envelope(latest("weekly_picks_*.json"))
+    perf = load_envelope(latest("weekly_performance_*.json"))
+    hot = load_envelope(latest("hot_sectors_*.json"))
+
+    lines = [f"[원우 아빠 주간 추천 — {today}]"]
+
+    items = []
+    if picks_data:
+        items = picks_data.get("picks") or picks_data.get("signals") or picks_data.get("recommendations") or []
+
+    if not items:
+        lines.append("")
+        lines.append("(이번 주 추천 데이터 없음)")
+    else:
+        n_show = min(3, len(items))
+        lines.append("")
+        lines.append(f"이번 주 TOP {n_show}")
+        for i, p in enumerate(items[:n_show], 1):
+            name = p.get("name", "")
+            code = p.get("code", "")
+            score = p.get("score", "?")
+            ma = p.get("moving_averages") or {}
+            ma10 = ma.get("ma10") or p.get("ma10")
+            ma15 = ma.get("ma15") or p.get("ma15")
+
+            lines.append("")
+            lines.append(f"{i}. {name} ({code}) {score}점")
+
+            spark = filter_sparkline(p.get("nine_filter"))
+            if spark:
+                lines.append(f"   {spark}")
+
+            # weekly 는 reason_short (압축 한국어 + type 코드 혼합) 사용 → type 코드 풀어서 노출
+            rs = reason_short_humanize(p.get("reason_short", ""))
+            if rs:
+                lines.append(f"   👍 {rs}")
+            else:
+                pos, neg = positives_summary(p.get("positive_signals"), p.get("negative_signals"))
+                if pos:
+                    lines.append("   👍 " + ", ".join(pos))
+                if neg:
+                    lines.append("   👎 " + ", ".join(neg))
+
+            try:
+                if ma10 and ma15:
+                    lines.append(f"   진입: ma10 {int(float(ma10)):,} / ma15 {int(float(ma15)):,}")
+            except (TypeError, ValueError):
+                pass
+
+    if perf:
+        avg = perf.get("avg_return_pct") or perf.get("avg_return")
+        winrate = perf.get("win_rate_pct") or perf.get("win_rate")
+        n = perf.get("count") or perf.get("n")
+        try:
+            if avg is not None:
+                lines.append("")
+                lines.append(f"4주 성과: 평균 {fmt_signed(float(avg))}% / 승률 {int(float(winrate or 0))}% (n={n if n is not None else '?'})")
+        except (TypeError, ValueError):
+            pass
+
+    if hot:
+        h = [s.get("name") or s.get("sector") for s in (hot.get("hot_sectors") or [])]
+        h = [x for x in h if x][:2]
+        if h:
+            lines.append("")
+            lines.append("🔥 핫섹터: " + ", ".join(h))
+
+    lines.append("")
+    lines.append("— Claude")
+    return "\n".join(lines)
+
+
+def monthly_message() -> str:
+    """src/backtest/report.py write() schema:
+    {config:{end_date, lookback_years, initial_cash, universe_top_n, max_holdings, ...},
+     metrics:{cagr_pct, sharpe, mdd_pct, alpha_vs_benchmark_pct, total_return_pct,
+              win_rate_pct, avg_trade_pct, trade_count},
+     benchmark_total_return_pct, trades:[{code,name,return_pct,...}], equity_curve, monthly_picks}
+    """
+    bt = load_envelope(latest("backtest_*.json"))
+    yyyymm = kst_yyyymm()
+
+    lines = [f"[원우 아빠 월간 백테스트 — {yyyymm}]"]
+
+    if not bt:
+        lines.append("")
+        lines.append("(백테스트 데이터 없음)")
+        run_id = os.environ.get("GITHUB_RUN_ID", "?")
+        lines.append(f"리포트: artifact backtest-{run_id}")
+        lines.append("")
+        lines.append("— Claude")
+        return "\n".join(lines)
+
+    cfg = bt.get("config") or {}
+    m = bt.get("metrics") or {}
+    bench_ret = bt.get("benchmark_total_return_pct")
+
+    header_parts = []
+    if cfg.get("lookback_years") is not None:
+        header_parts.append(f"{cfg['lookback_years']}년")
+    if cfg.get("universe_top_n") is not None:
+        header_parts.append(f"Top{cfg['universe_top_n']}")
+    if cfg.get("max_holdings") is not None:
+        header_parts.append(f"보유{cfg['max_holdings']}")
+    if header_parts:
+        lines.append("")
+        lines.append("config: " + " / ".join(header_parts))
+
+    def push_metric(label, key, fmt="{:.1f}", suffix="%"):
+        v = m.get(key)
+        if v is None:
+            return
+        try:
+            lines.append(f"  {label}: {fmt.format(float(v))}{suffix}")
+        except (TypeError, ValueError):
+            pass
+
+    lines.append("")
+    lines.append("📊 5년 성과")
+    push_metric("총수익(누적)", "total_return_pct", "{:+.1f}")
+    push_metric("CAGR(연복리)", "cagr_pct", "{:+.1f}")
+    # Sharpe: 위험대비 수익. 1↑ 양호, 2↑ 우수
+    v = m.get("sharpe")
+    if v is not None:
+        try:
+            lines.append(f"  Sharpe(위험대비): {float(v):.2f}  (1↑ 양호)")
+        except (TypeError, ValueError):
+            pass
+    # MDD: 최대 낙폭. 절댓값 클수록 손실 위험 큼
+    v = m.get("mdd_pct")
+    if v is not None:
+        try:
+            lines.append(f"  MDD(최대낙폭): {float(v):+.1f}%  (절댓값↑ 위험↑)")
+        except (TypeError, ValueError):
+            pass
+
+    alpha = m.get("alpha_vs_benchmark_pct")
+    if alpha is not None:
+        try:
+            lines.append(f"  알파(KOSPI 대비): {fmt_signed(float(alpha), 1)}%pt")
+        except (TypeError, ValueError):
+            pass
+    if bench_ret is not None:
+        try:
+            lines.append(f"  KOSPI수익: {fmt_signed(float(bench_ret), 1)}%")
+        except (TypeError, ValueError):
+            pass
+
+    win = m.get("win_rate_pct")
+    avg_trade = m.get("avg_trade_pct")
+    n_trade = m.get("trade_count")
+    if any(v is not None for v in (win, avg_trade, n_trade)):
+        lines.append("")
+        lines.append("📈 거래")
+        if win is not None:
+            try:
+                lines.append(f"  승률: {float(win):.0f}% (n={n_trade if n_trade is not None else '?'})")
+            except (TypeError, ValueError):
+                pass
+        if avg_trade is not None:
+            try:
+                lines.append(f"  평균수익: {fmt_signed(float(avg_trade))}%")
+            except (TypeError, ValueError):
+                pass
+
+    trades = bt.get("trades") or []
+    if trades:
+        try:
+            top = sorted(
+                [t for t in trades if isinstance(t.get("return_pct"), (int, float))],
+                key=lambda t: t["return_pct"],
+                reverse=True,
+            )[:3]
+            if top:
+                lines.append("")
+                lines.append("🏆 TOP 3 수익")
+                for t in top:
+                    code = t.get("code", "")
+                    name = t.get("name", "")
+                    ret = t["return_pct"]
+                    lines.append(f"  + {code} {name} {fmt_signed(float(ret))}%")
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    mp = bt.get("monthly_picks") or []
+    if mp:
+        last = mp[-1]
+        ps = last.get("picks") or []
+        if ps:
+            names = []
+            for x in ps[:5]:
+                if isinstance(x, dict):
+                    names.append(f"{x.get('code','')} {x.get('name','')}".strip())
+                else:
+                    names.append(str(x))
+            if names:
+                lines.append("")
+                lines.append("🎯 이번 달 추천")
+                lines.append("  " + " / ".join(names[:5]))
+
+    run_id = os.environ.get("GITHUB_RUN_ID", "?")
+    lines.append("")
+    lines.append(f"전체 리포트: artifact backtest-{run_id}")
+    lines.append("")
+    lines.append("— Claude")
+    return "\n".join(lines)
+
+
+# ---------------------------- Kakao API ----------------------------
+
+KAUTH = "https://kauth.kakao.com"
+KAPI = "https://kapi.kakao.com"
+
+
+def refresh_access_token(rest_api_key: str, refresh_token: str, client_secret: str = "") -> dict:
+    payload = {
+        "grant_type": "refresh_token",
+        "client_id": rest_api_key,
+        "refresh_token": refresh_token,
     }
-  ],
-  "created_at": "..."
+    if client_secret:
+        payload["client_secret"] = client_secret
+    body = urllib.parse.urlencode(payload).encode("utf-8")
+    req = Request(
+        f"{KAUTH}/oauth/token",
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def send_to_self(access_token: str, text: str) -> dict:
+    safe_text = text if len(text) <= 800 else text[:797] + "..."
+    template = {
+        "object_type": "text",
+        "text": safe_text,
+        "link": {
+            "web_url": "https://github.com/newwonwoo/stock/actions",
+            "mobile_web_url": "https://github.com/newwonwoo/stock/actions",
+        },
+        "button_title": "리포트",
+    }
+    body = urllib.parse.urlencode({"template_object": json.dumps(template, ensure_ascii=False)}).encode("utf-8")
+    req = Request(
+        f"{KAPI}/v2/api/talk/memo/default/send",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    with urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+# ---------------------------- main ----------------------------
+
+BUILDERS = {
+    "daily": daily_message,
+    "weekly": weekly_message,
+    "monthly": monthly_message,
 }
-```
 
-**주의:** picks 안에는 `positive_signals`/`negative_signals` 가 없습니다 (`reason_short` 로 압축). 봇이 사유 풀어 보고 싶으면 같은 날짜의 `buy_signals_*.json` 을 매칭해서 가져와야 함.
 
-### 2.6 `backtest_{date}.json` (envelope 없음)
-schema 는 `src/backtest/report.py write()` 의 출력. 핵심:
-- `config`: lookback_years, universe_top_n, max_holdings, fee_bps, slippage_bps
-- `metrics`: cagr_pct, sharpe, mdd_pct, alpha_vs_benchmark_pct, total_return_pct, win_rate_pct, avg_trade_pct, trade_count
-- `benchmark_total_return_pct`: KOSPI 등 비교지수 5년 누적
-- `trades[]`: {code, name, entry_date, exit_date, entry_price, exit_price, return_pct, days_held}
-- `monthly_picks[]`: 월별 선정 종목
+def write_step_summary(text: str) -> None:
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary:
+        return
+    try:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(text)
+    except OSError:
+        pass
 
-## 3. 카톡 발송 패턴 (봇이 같은 카톡으로 자체 알림 보낼 때 재사용)
 
-`scripts/kakao_send.py` 의 `refresh_access_token()` + `send_to_self()` 두 함수 패턴이 가장 작은 단위입니다. EC2 봇에서 자동매매 체결·손익 등 자체 알림을 보내고 싶으면 동일 패턴 + 동일 Secrets 를 환경변수로 주입하면 됩니다.
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("kind", choices=list(BUILDERS.keys()))
+    args = ap.parse_args()
 
-```python
-# 토큰 갱신
-POST https://kauth.kakao.com/oauth/token
-  Content-Type: application/x-www-form-urlencoded
-  body: grant_type=refresh_token
-        client_id={KAKAO_REST_API_KEY}
-        client_secret={KAKAO_CLIENT_SECRET}   # 본 앱은 Client Secret ON
-        refresh_token={KAKAO_REFRESH_TOKEN}
-→ {"access_token": "...", "refresh_token": "...", ...}
+    text = BUILDERS[args.kind]()
 
-# 자기톡 발송
-POST https://kapi.kakao.com/v2/api/talk/memo/default/send
-  Authorization: Bearer {access_token}
-  Content-Type: application/x-www-form-urlencoded
-  body: template_object={"object_type":"text",
-                          "text":"{본문, 800자 이내}",
-                          "link":{"web_url":"https://github.com/newwonwoo/stock/actions",
-                                  "mobile_web_url":"..."},
-                          "button_title":"리포트"}
-→ {"result_code":0}
-```
+    print("---- message preview ----")
+    print(text)
+    print("---- end preview ----")
+    write_step_summary(f"### Kakao 메시지 미리보기 ({args.kind})\n\n```\n{text}\n```\n")
 
-**Client Secret 주의:** 이 앱은 Client Secret 활성화 ON. 토큰 요청에 client_secret 누락 시 KOE010 오류.
+    if os.environ.get("DRY_RUN") == "1":
+        print("DRY_RUN=1 → 발송 생략")
+        return 0
 
-**문자 한계:** template_object.text 약 800자. `kakao_send.py` 는 800자 초과 시 자동 절단.
+    rest = os.environ.get("KAKAO_REST_API_KEY")
+    rt = os.environ.get("KAKAO_REFRESH_TOKEN")
+    cs = os.environ.get("KAKAO_CLIENT_SECRET", "")
+    if not rest or not rt:
+        print("[ERR] KAKAO_REST_API_KEY / KAKAO_REFRESH_TOKEN 누락 — Secrets 설정 필요", file=sys.stderr)
+        return 2
 
-## 4. Kakao Secrets (GitHub Repo)
+    try:
+        tok = refresh_access_token(rest, rt, cs)
+    except (HTTPError, URLError) as e:
+        body = e.read().decode("utf-8", "ignore") if isinstance(e, HTTPError) else str(e)
+        print(f"[ERR] token refresh 실패: {body}", file=sys.stderr)
+        write_step_summary(f"### Kakao token refresh 실패\n```\n{body}\n```\n")
+        return 3
 
-repo `Settings → Secrets and variables → Actions` 에 등록됨:
-- `KAKAO_REST_API_KEY` — Kakao Developers 앱의 stockresearch 키 (NOT Default Rest API Key)
-- `KAKAO_REFRESH_TOKEN` — talk_message scope refresh_token (60일 수명)
-- `KAKAO_CLIENT_SECRET` — Client Secret 코드 (Kakao Developers 앱 → 플랫폼 키 → 키별 페이지)
+    access = tok.get("access_token")
+    new_rt = tok.get("refresh_token")
+    if not access:
+        print(f"[ERR] access_token 없음: {tok}", file=sys.stderr)
+        return 4
 
-EC2 봇이 같은 카톡으로 발송하려면 위 3개를 봇 측 환경변수로도 노출 필요.
+    try:
+        result = send_to_self(access, text)
+    except (HTTPError, URLError) as e:
+        body = e.read().decode("utf-8", "ignore") if isinstance(e, HTTPError) else str(e)
+        print(f"[ERR] memo/default/send 실패: {body}", file=sys.stderr)
+        write_step_summary(f"### Kakao 발송 실패\n```\n{body}\n```\n")
+        return 5
 
-## 5. refresh_token 회전 정책
+    print(f"[OK] send: {result}")
 
-Kakao 가 refresh_token 만료 임박 (60일 수명, 1개월 이내) 시 응답에 새 refresh_token 포함. `kakao_send.py` 는 이를 감지하고 GitHub Step Summary 에 경고 출력 (앞 12자만 노출, 보안). 사용자가 GitHub Secret 을 새 값으로 교체.
+    if new_rt and new_rt != rt:
+        warn = (
+            "## Kakao refresh_token 갱신됨\n\n"
+            "새 refresh_token 을 반환했습니다. KAKAO_REFRESH_TOKEN 을 교체해 주세요.\n\n"
+            f"앞 12자: {new_rt[:12]}...  길이: {len(new_rt)}\n"
+        )
+        print(warn, file=sys.stderr)
+        write_step_summary(warn)
 
-EC2 봇도 동일 패턴 권장: `refresh_token` 회전 시 영구 저장소를 갱신.
+    return 0
 
-## 6. 카톡 메시지 형식 (사용자가 받는 모양)
 
-`scripts/kakao_send.py` 의 `daily_message()`/`weekly_message()`/`monthly_message()` 가 한국어 메시지 빌드. 핵심 섹션:
-
-**daily 메시지:**
-```
-[원우 아빠 매크로 — YYYY-MM-DD]
-🟢 외국인 순매수 + KOSPI 강보합
-📊 KOSPI +0.84% / 외인 +1234억 / USDKRW 1382
-🔥 핫섹터: 반도체, 2차전지
-
-🤖 봇 시그널:
-  005930 STRONG_BUY / 373220 STRONG_BUY
-
-💡 매수 추천 사유:
-1. 삼성전자 (005930) 94점
-   👍 연금 신규편입(+15), 외인+기관 매수(+8), 리포트 목표가↑(+10)
-2. LG에너지솔루션 (373220) 91점
-   👍 연금 확대(+15)
-   👎 공매도 Top10(-20)
-
-🚫 차단:
-- 가나전자 (123456): 감사의견 거절
-
-— Claude
-```
-
-**weekly 메시지:** 종목 TOP 3, 9 필터 sparkline (`✓재무 △정량 ⭐연금 ...`), 진입가 (ma10/ma15), 4주 성과.
-**monthly 메시지:** 5년 백테스트 메트릭 (CAGR/Sharpe/MDD/알파), 거래 통계 (승률/평균수익), TOP 3 수익 거래, 이번 달 추천.
-
-봇이 자체 알림을 보낼 때 톤·길이·이모지 통일 권장 (사용자 가독성).
-
-## 7. 봇 측 권장 구현 (선택)
-
-체결 알림 / 손익 보고를 같은 카톡으로 받고 싶으면:
-
-```python
-# 봇 측 cron 예시
-def send_trade_notification(trade):
-    text = f"""[봇 체결 — {trade.timestamp:%Y-%m-%d %H:%M}]
-{trade.action} {trade.name} ({trade.code})
-  체결가: {trade.price:,}원
-  수량: {trade.qty}주
-  실현손익: {trade.pnl:+.1f}%
-
-— Bot"""
-    access = refresh_access_token(REST, RT, CS)
-    send_to_self(access, text)
-```
-
-또는 봇이 별도 카톡 봇/메신저 채널을 쓰고 카톡 발송은 GitHub Actions 흐름에만 맡기는 분리 정책도 가능.
-
-## 8. 변경 이력
-
-- 2026-05-05 — 초기 작성 (kakao_send.py + GitHub Actions step 3개 추가). Cowork 세션 결과.
+if __name__ == "__main__":
+    sys.exit(main())
