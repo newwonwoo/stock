@@ -27,8 +27,9 @@ class BotDashboardError(RuntimeError):
 
 
 def _config() -> tuple[str, str] | None:
-    url = os.environ.get("BOT_DASHBOARD_URL", "").rstrip("/")
-    token = os.environ.get("SWING_API_TOKEN", "")
+    # GitHub Secrets 가 multi-line 으로 저장된 경우 trailing \n 또는 공백 포함 가능 → strip 필수.
+    url = os.environ.get("BOT_DASHBOARD_URL", "").strip().rstrip("/")
+    token = os.environ.get("SWING_API_TOKEN", "").strip()
     if not url or not token:
         return None
     return (url, token)
