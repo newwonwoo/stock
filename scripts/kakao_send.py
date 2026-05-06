@@ -284,6 +284,22 @@ def daily_message() -> str:
     else:
         lines.append("데이터 없음")
 
+    # 텔레그램 근거 링크 — STRONG_BUY 종목 중 source_url 박힌 positive_signal 모음
+    # buy_signal_generator._collect_positive 가 ANALYST_TARGET_UP 에 source_url 채움.
+    links = []
+    if buys:
+        for s in (buys.get("signals") or []):
+            if s.get("signal") == "STRONG_BUY" and not s.get("blocked"):
+                for p in (s.get("positive_signals") or []):
+                    if isinstance(p, dict) and p.get("source_url"):
+                        links.append((s.get("code", ""), p.get("source_url")))
+                        break  # 종목당 한 개만
+    if links:
+        lines.append("")
+        lines.append("🔍 리포트 근거:")
+        for code, url in links[:3]:
+            lines.append(f"- {code} → {url}")
+
     if blacklist:
         items = blacklist.get("blacklist") or []
         if items:
@@ -365,6 +381,27 @@ def weekly_message() -> str:
                     lines.append(f"   진입: ma10 {int(float(ma10)):,} / ma15 {int(float(ma15)):,}")
             except (TypeError, ValueError):
                 pass
+
+        # 텔레그램 근거 링크 — TOP 3 picks 대상. picks 항목에 positive_signals 가 박혀
+        # 있으면 source_url 추출, 없고 source_url 직접 박혀 있으면 그것 사용.
+        wlinks = []
+        for p in items[:3]:
+            if not isinstance(p, dict):
+                continue
+            url = ""
+            for ps in (p.get("positive_signals") or []):
+                if isinstance(ps, dict) and ps.get("source_url"):
+                    url = ps["source_url"]
+                    break
+            if not url and p.get("source_url"):
+                url = p["source_url"]
+            if url:
+                wlinks.append((p.get("code", ""), url))
+        if wlinks:
+            lines.append("")
+            lines.append("🔍 리포트 근거:")
+            for code, url in wlinks[:3]:
+                lines.append(f"- {code} → {url}")
 
     if perf:
         avg = perf.get("avg_return_pct") or perf.get("avg_return")
@@ -605,48 +642,48 @@ def main() -> int:
     print("---- message preview ----")
     print(text)
     print("---- end preview ----")
-    write_step_summary(f"### Kakao 메시지 미리보기 ({args.kind})\n\n```\n{text}\n```\n")
+    write_step_summary(f"### Kakao msg preview ({args.kind})\n\n```\n{text}\n```\n")
 
     if os.environ.get("DRY_RUN") == "1":
-        print("DRY_RUN=1 → 발송 생략")
+        print("DRY_RUN=1 -> skip send")
         return 0
 
     rest = os.environ.get("KAKAO_REST_API_KEY")
     rt = os.environ.get("KAKAO_REFRESH_TOKEN")
     cs = os.environ.get("KAKAO_CLIENT_SECRET", "")
     if not rest or not rt:
-        print("[ERR] KAKAO_REST_API_KEY / KAKAO_REFRESH_TOKEN 누락 — Secrets 설정 필요", file=sys.stderr)
+        print("[ERR] KAKAO_REST_API_KEY / KAKAO_REFRESH_TOKEN missing", file=sys.stderr)
         return 2
 
     try:
         tok = refresh_access_token(rest, rt, cs)
     except (HTTPError, URLError) as e:
         body = e.read().decode("utf-8", "ignore") if isinstance(e, HTTPError) else str(e)
-        print(f"[ERR] token refresh 실패: {body}", file=sys.stderr)
-        write_step_summary(f"### Kakao token refresh 실패\n```\n{body}\n```\n")
+        print(f"[ERR] token refresh fail: {body}", file=sys.stderr)
+        write_step_summary(f"### Kakao token refresh fail\n```\n{body}\n```\n")
         return 3
 
     access = tok.get("access_token")
     new_rt = tok.get("refresh_token")
     if not access:
-        print(f"[ERR] access_token 없음: {tok}", file=sys.stderr)
+        print(f"[ERR] no access_token: {tok}", file=sys.stderr)
         return 4
 
     try:
         result = send_to_self(access, text)
     except (HTTPError, URLError) as e:
         body = e.read().decode("utf-8", "ignore") if isinstance(e, HTTPError) else str(e)
-        print(f"[ERR] memo/default/send 실패: {body}", file=sys.stderr)
-        write_step_summary(f"### Kakao 발송 실패\n```\n{body}\n```\n")
+        print(f"[ERR] memo/default/send fail: {body}", file=sys.stderr)
+        write_step_summary(f"### Kakao send fail\n```\n{body}\n```\n")
         return 5
 
     print(f"[OK] send: {result}")
 
     if new_rt and new_rt != rt:
         warn = (
-            "## Kakao refresh_token 갱신됨\n\n"
-            "새 refresh_token 을 반환했습니다. KAKAO_REFRESH_TOKEN 을 교체해 주세요.\n\n"
-            f"앞 12자: {new_rt[:12]}...  길이: {len(new_rt)}\n"
+            "## Kakao refresh_token rotated\n\n"
+            "New refresh_token returned. Update GitHub Secret KAKAO_REFRESH_TOKEN.\n\n"
+            f"first 12: {new_rt[:12]}...  len: {len(new_rt)}\n"
         )
         print(warn, file=sys.stderr)
         write_step_summary(warn)
