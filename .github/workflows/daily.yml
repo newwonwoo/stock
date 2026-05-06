@@ -3,11 +3,36 @@ name: Daily Collectors
 on:
   workflow_dispatch:
   schedule:
-    # 매일 07:00 KST = 22:00 UTC (전일)
+    # 매일 07:00 KST = 22:00 UTC 발동.
+    # 단 check-holiday 가 KST today_kst() (= 봇이 그날 장에서 사용할 날)
+    # 가 영업일인지 검사 → 휴장이면 collect 잡 skip. 즉 "다음날이 영업일" 일
+    # 때만 push.
     - cron: "0 22 * * *"
 
 jobs:
+  check-holiday:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, ".")
+          from src.utils.kst_time import is_business_day, today_kst
+          today = today_kst()
+          skip = "true" if not is_business_day(today) else "false"
+          if skip == "true":
+              print(f"::notice::{today} 휴장 — collect 잡 skip")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"skip={skip}\n")
+          PY
+
   collect:
+    needs: check-holiday
+    if: needs.check-holiday.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

@@ -20,7 +20,29 @@ on:
     - cron: "0 0 1 * *"
 
 jobs:
+  check-holiday:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, ".")
+          from src.utils.kst_time import is_business_day, today_kst
+          today = today_kst()
+          skip = "true" if not is_business_day(today) else "false"
+          if skip == "true":
+              print(f"::notice::{today} 휴장 — backtest 잡 skip")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"skip={skip}\n")
+          PY
+
   backtest:
+    needs: check-holiday
+    if: needs.check-holiday.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 350   # pykrx 호출이 누적되어 무거움. 안전 마진 크게.
 

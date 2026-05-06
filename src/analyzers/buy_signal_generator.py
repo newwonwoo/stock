@@ -97,7 +97,12 @@ def generate(
     blocked = bool(blocked_reasons)
     signal = "AVOID" if blocked else _signal(score, has_red)
 
-    valid_until = (today_kst() + timedelta(days=valid_days)).strftime("%Y-%m-%d")
+    # valid_until: 영업일 valid_days 후 (휴장일 skip). 봇 측 휴장일 skip 정책 일치.
+    from src.utils.kst_time import next_business_day
+    cur = today_kst()
+    for _ in range(valid_days):
+        cur = next_business_day(cur)
+    valid_until = cur.strftime("%Y-%m-%d")
 
     return {
         "code": code,
