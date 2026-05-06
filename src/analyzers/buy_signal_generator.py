@@ -2,6 +2,13 @@
 buy_signal_generator. 9중 필터 결과 → STRONG_BUY/BUY/HOLD/AVOID 판정.
 
 INTEGRATION.md §3.1 schema 그대로 출력 (envelope 은 호출자가 씌움).
+
+[PATCHED v2 — 2026-05-06]
+- ANALYST_TARGET_UP positive_signal 에 source_url 추가
+  → report_momentum.details["matched_messages"] 첫 항목의 channel/message_id 로
+    https://t.me/{channel}/{message_id} 형식 영구 링크 생성.
+  → 카톡 메시지 끝 "🔍 리포트 근거" 섹션에서 사용.
+- matched_messages 가 없거나 형식이 다르면 source_url=""(빈 문자열) 로 안전 fallback.
 """
 
 from __future__ import annotations
@@ -37,6 +44,30 @@ def _signal(score: int, has_red: bool) -> str:
     return "AVOID"
 
 
+def _telegram_url_from_report(rep: FilterResult) -> str:
+    """report_momentum.details.matched_messages 의 첫 메시지에서 t.me 영구 링크 생성.
+    - matched_messages 비어 있거나 channel/message_id 누락 시 빈 문자열.
+    - matched (구버전 키) 도 fallback 으로 받아줌.
+    """
+    if rep is None or not isinstance(rep.details, dict):
+        return ""
+    matched = rep.details.get("matched_messages") or rep.details.get("matched") or []
+    if not matched or not isinstance(matched, list):
+        return ""
+    first = matched[0]
+    if not isinstance(first, dict):
+        return ""
+    channel = first.get("channel") or first.get("channel_username") or ""
+    msg_id = first.get("message_id")
+    if not channel or msg_id is None:
+        return ""
+    try:
+        msg_id_int = int(msg_id)
+    except (TypeError, ValueError):
+        return ""
+    return f"https://t.me/{channel}/{msg_id_int}"
+
+
 def _collect_positive(filters: dict[str, FilterResult]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     nps = filters.get("nps")
@@ -44,7 +75,13 @@ def _collect_positive(filters: dict[str, FilterResult]) -> list[dict[str, Any]]:
         out.append({"type": "NPS_NEW" if nps.details["category"] == "신규" else "NPS_ADD", "score": 15})
     rep = filters.get("report")
     if rep and rep.grade == STAR:
-        out.append({"type": "ANALYST_TARGET_UP", "score": 10})
+        src_url = _telegram_url_from_report(rep)
+        entry: dict[str, Any] = {"type": "ANALYST_TARGET_UP", "score": 10}
+        # 빈 문자열이어도 키는 추가 — 다운스트림 (kakao_send) 가 source_url 존재 여부로 분기.
+        entry["source_url"] = src_url
+        if src_url:
+            entry["source_label"] = "리포트 메시지"
+        out.append(entry)
     flow = filters.get("flow")
     if flow and flow.details.get("co_buy_ratio", 0) >= 0.7:
         out.append({"type": "STRONG_FLOW", "score": 8})
