@@ -1,4 +1,10 @@
-"""필터 ⑨ 리포트 모멘텀. 4주 내 코어 애널 매수 의견 카운트."""
+"""필터 ⑨ 리포트 모멘텀. 4주 내 코어 애널 매수 의견 카운트.
+
+[PATCHED v2 — 2026-05-06]
+- details 에 matched_messages 박제 추가 (channel/message_id/message_uid/date_iso/parsed)
+- 카톡 메시지에 텔레그램 영구 링크 (https://t.me/{channel}/{message_id}) 노출용
+- 기존 grade/score 로직은 변경 없음.
+"""
 
 from __future__ import annotations
 
@@ -50,6 +56,20 @@ def analyze(code: str, telegram_messages: list[dict[str, Any]], window_days: int
     else:
         grade, score = YELLOW, 50
 
+    # [PATCH] matched_messages 를 details 에 박제 — 카톡 빌더가 출처 링크 만들 때 사용.
+    # 메시지 dict 전체를 그대로 두면 용량이 커지므로 핵심 5개 필드만 추림.
+    matched_brief: list[dict[str, Any]] = []
+    for mm in matched:
+        matched_brief.append(
+            {
+                "channel": mm.get("channel", ""),
+                "message_id": mm.get("message_id"),
+                "message_uid": mm.get("message_uid", ""),
+                "date_iso": mm.get("date_iso", ""),
+                "parsed": mm.get("parsed", {}),
+            }
+        )
+
     return FilterResult(
         grade=grade,
         score=score,
@@ -58,5 +78,6 @@ def analyze(code: str, telegram_messages: list[dict[str, Any]], window_days: int
             "negative_count": neg,
             "target_up_count": target_ups,
             "window_days": window_days,
+            "matched_messages": matched_brief,
         },
     )
