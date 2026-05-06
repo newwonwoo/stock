@@ -212,7 +212,16 @@ def daily_message() -> str:
     buys = load_envelope(latest("buy_signals_*.json"))
     blacklist = load_envelope(OUT_DIR / "blacklist_active.json")
 
-    lines = [f"[원우 아빠 매크로 — {today}]"]
+    # market_as_of 가 envelope 에 박혀 있으면 헤더에 보조 표시 (휴장일 직전 영업일 기준)
+    market_as_of = None
+    for env in (macro, hot, buys):
+        if env and isinstance(env, dict) and env.get("market_as_of"):
+            market_as_of = env["market_as_of"]
+            break
+    if market_as_of and market_as_of != today:
+        lines = [f"[원우 아빠 매크로 — {today} (기준 {market_as_of})]"]
+    else:
+        lines = [f"[원우 아빠 매크로 — {today}]"]
 
     if macro:
         emoji = emoji_for(macro.get("overall"))
@@ -304,7 +313,15 @@ def weekly_message() -> str:
     perf = load_envelope(latest("weekly_performance_*.json"))
     hot = load_envelope(latest("hot_sectors_*.json"))
 
-    lines = [f"[원우 아빠 주간 추천 — {today}]"]
+    market_as_of = None
+    for env in (picks_data, hot):
+        if env and isinstance(env, dict) and env.get("market_as_of"):
+            market_as_of = env["market_as_of"]
+            break
+    if market_as_of and market_as_of != today:
+        lines = [f"[원우 아빠 주간 추천 — {today} (기준 {market_as_of})]"]
+    else:
+        lines = [f"[원우 아빠 주간 추천 — {today}]"]
 
     items = []
     if picks_data:
@@ -444,7 +461,7 @@ def monthly_message() -> str:
             pass
     if bench_ret is not None:
         try:
-            lines.append(f"  KOSPI수익: {fmt_signed(float(bench_ret), 1)}%")
+            lines.append(f"  벤치마크(KOSPI 5년 단순보유): {fmt_signed(float(bench_ret), 1)}%")
         except (TypeError, ValueError):
             pass
 
