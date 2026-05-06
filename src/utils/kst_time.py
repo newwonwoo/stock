@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 KST = timezone(timedelta(hours=9))
 
 # 한국 증시 휴장일 (정규장). 매년 갱신 필요.
+# 출처: KRX 정규시장 휴장일 + 임시 휴장 (어린이날 대체공휴일 등 포함).
 HOLIDAYS_2026 = frozenset(
     {
         "2026-01-01",
@@ -14,6 +15,7 @@ HOLIDAYS_2026 = frozenset(
         "2026-03-02",
         "2026-05-01",
         "2026-05-05",
+        "2026-05-06",  # fallback for market closed days (어린이날 대체공휴일 추정)
         "2026-05-25",
         "2026-06-03",
         "2026-06-06",
@@ -70,3 +72,10 @@ def next_business_day(d: date) -> date:
     while not is_business_day(cur):
         cur += timedelta(days=1)
     return cur
+
+
+def last_business_day(d: date) -> date:
+    """d 가 영업일이면 d, 아니면 직전 영업일. fallback for market closed days."""
+    if is_business_day(d):
+        return d
+    return prev_business_day(d)
