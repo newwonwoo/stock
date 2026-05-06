@@ -12,6 +12,10 @@ End-to-end signal generation pipeline.
   5. macro_brief → macro_status_{date}.json
   6. blacklist_active.json (자동 제외 SHORT_TOP10 만 우선)
   7. 모두 HMAC 서명 envelope 으로 out/ 에 기록
+
+휴장일 fallback: krx_fetcher 의 모든 fetch 가 직전 영업일까지 자동 재시도. 본 파이프라인은
+실제로 데이터가 잡힌 날짜 (market_as_of) 를 envelope 의 data 에 박제해 카톡/UI 가
+"기준 5/2(금)" 식 헤더를 그릴 수 있도록 한다.
 """
 
 from __future__ import annotations
@@ -77,8 +81,13 @@ def _telegram_messages() -> list[dict[str, Any]]:
 
 
 def _krx_macro_indicators() -> dict[str, float]:
-    """KOSPI / KOSDAQ 변화율 + 외인 순매수. KRX (pykrx) 만 사용. KIS 의존 X."""
-    out: dict[str, float] = {"kospi_change": 0.0, "kosdaq_change": 0.0, "foreign_kospi_net": 0.0}
+    """KOSPI / KOSDAQ 변화율 + 외인 순매수 + USD/KRW. KRX (pykrx + FDR) 만 사용."""
+    out: dict[str, float] = {
+        "kospi_change": 0.0,
+        "kosdaq_change": 0.0,
+        "foreign_kospi_net": 0.0,
+        "usd_krw": 0.0,
+    }
     try:
         out["kospi_change"] = krx_fetcher.fetch_index_change("1001")
     except Exception as e:
@@ -91,6 +100,10 @@ def _krx_macro_indicators() -> dict[str, float]:
         out["foreign_kospi_net"] = krx_fetcher.fetch_kospi_foreign_net()
     except Exception as e:
         log.info(f"KOSPI 외인순매수 실패: {e}")
+    try:
+        out["usd_krw"] = krx_fetcher.fetch_usdkrw()  # fallback for market closed days
+    except Exception as e:
+        log.info(f"USD/KRW 실패: {e}")
     return out
 
 
@@ -182,8 +195,17 @@ def main() -> int:
 
     today_str = fmt_date(today_kst())
 
+    # 데이터 기준일자 결정 — 휴장이면 직전 영업일. fallback for market closed days.
+    try:
+        actual_data_date = krx_fetcher.resolve_market_data_date()
+    except Exception as e:
+        log.info(f"resolve_market_data_date 실패 → today 로 fallback: {e}")
+        actual_data_date = today_kst()
+    market_as_of = fmt_date(actual_data_date)
+    log.info(f"market_as_of (data 기준일자) = {market_as_of}")
+
     # 1. universe + 시장 데이터
-    universe = krx_fetcher.fetch_universe_by_market_cap()
+    universe = krx_fetcher.fetch_universe_by_market_cap(d=actual_data_date)
     universe.sort(key=lambda t: t.market_cap, reverse=True)
     universe = universe[:universe_limit]
     log.info(f"universe limited to top {len(universe)} by market cap")
@@ -196,7 +218,7 @@ def main() -> int:
         universe = [TickerInfo(code=c, name=c, market="KOSPI", market_cap=0) for c in wl]
 
     try:
-        short_top = krx_fetcher.fetch_short_top10()
+        short_top = krx_fetcher.fetch_short_top10(d=actual_data_date)
     except Exception as e:
         log.info(f"short_top10 실패 (skip): {e}")
         short_top = {"KOSPI": [], "KOSDAQ": []}
@@ -210,7 +232,7 @@ def main() -> int:
     signals: list[dict[str, Any]] = []
     for t in universe:
         try:
-            ohlcv = krx_fetcher.fetch_ohlcv(t.code, days=80)
+            ohlcv = krx_fetcher.fetch_ohlcv(t.code, days=80, d=actual_data_date)
         except Exception as e:
             log.info(f"{t.code} OHLCV 실패 skip: {e}")
             continue
@@ -218,13 +240,13 @@ def main() -> int:
             continue
 
         try:
-            inv = krx_fetcher.fetch_investor_flow(t.code, days=14)
+            inv = krx_fetcher.fetch_investor_flow(t.code, days=14, d=actual_data_date)
         except Exception:
             import pandas as pd
             inv = pd.DataFrame()
 
         try:
-            fo = krx_fetcher.fetch_foreign_ownership(t.code, days=30)
+            fo = krx_fetcher.fetch_foreign_ownership(t.code, days=30, d=actual_data_date)
         except Exception:
             fo = None
 
@@ -254,8 +276,12 @@ def main() -> int:
         sig = buy_signal_generator.generate(t.code, t.name, filters, ma)
         signals.append(sig)
 
-    # 3. payload 구성 + 서명
-    buy_payload = {"date": today_str, "signals": signals}
+    # 3. payload 구성 + 서명 — market_as_of 박제 (fallback for market closed days)
+    buy_payload = {
+        "date": today_str,
+        "market_as_of": market_as_of,  # fallback for market closed days
+        "signals": signals,
+    }
     _write_signed(OUT_DIR / f"buy_signals_{today_str}.json", buy_payload, key)
 
     # macro (KRX 기반, KIS 무관)
@@ -263,10 +289,12 @@ def main() -> int:
     macro_payload = macro_brief.generate(
         kospi_change=macro_ind["kospi_change"],
         kosdaq_change=macro_ind["kosdaq_change"],
-        usd_krw=0.0,
+        usd_krw=macro_ind["usd_krw"],
         foreign_kospi_net=macro_ind["foreign_kospi_net"],
         claude_opinion_short="자동 생성 (지표 일부 미수집)",
     )
+    if isinstance(macro_payload, dict):
+        macro_payload["market_as_of"] = market_as_of  # fallback for market closed days
     _write_signed(OUT_DIR / f"macro_status_{today_str}.json", macro_payload, key)
 
     # blacklist (현 단계: SHORT_TOP10 만)
@@ -290,7 +318,11 @@ def main() -> int:
             )
     _write_signed(
         OUT_DIR / "blacklist_active.json",
-        {"updated_at_date": today_str, "blacklist": blacklist},
+        {
+            "updated_at_date": today_str,
+            "market_as_of": market_as_of,  # fallback for market closed days
+            "blacklist": blacklist,
+        },
         key,
     )
 
@@ -300,11 +332,14 @@ def main() -> int:
     except Exception as e:
         log.info(f"hot_sectors 생성 실패 (skip): {e}")
         hot_payload = {"date": today_str, "hot_sectors": [], "cold_sectors": [], "all_sectors": []}
+    if isinstance(hot_payload, dict):
+        hot_payload.setdefault("market_as_of", market_as_of)  # fallback for market closed days
     _write_signed(OUT_DIR / f"hot_sectors_{today_str}.json", hot_payload, key)
 
     log.info(
         f"done: signals={len(signals)} blacklist={len(blacklist)} "
-        f"hot={len(hot_payload['hot_sectors'])} cold={len(hot_payload['cold_sectors'])}"
+        f"hot={len(hot_payload['hot_sectors'])} cold={len(hot_payload['cold_sectors'])} "
+        f"market_as_of={market_as_of}"
     )
     return 0
 
