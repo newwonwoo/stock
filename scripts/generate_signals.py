@@ -242,7 +242,8 @@ def main() -> int:
     signals: list[dict[str, Any]] = []
     for t in universe:
         try:
-            ohlcv = krx_fetcher.fetch_ohlcv(t.code, days=80, d=actual_data_date)
+            # 260일: 60주선 + MA250 (1년선) 둘 다 커버. 패턴 detect 가능.
+            ohlcv = krx_fetcher.fetch_ohlcv(t.code, days=260, d=actual_data_date)
         except Exception as e:
             log.info(f"{t.code} OHLCV 실패 skip: {e}")
             continue

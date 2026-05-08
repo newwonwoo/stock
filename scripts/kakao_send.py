@@ -131,6 +131,7 @@ POSITIVE_LABELS = {
     "NPS_ADD": "연금 확대",
     "ANALYST_TARGET_UP": "리포트 목표가↑",
     "STRONG_FLOW": "외인+기관 매수",
+    "PULLBACK_AT_MA250_SUPPORT": "1년선 위 조정 후 지지",
 }
 NEGATIVE_LABELS = {
     "NPS_REDUCE": "연금 축소/매도",

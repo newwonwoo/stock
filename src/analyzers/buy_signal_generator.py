@@ -85,6 +85,19 @@ def _collect_positive(filters: dict[str, FilterResult]) -> list[dict[str, Any]]:
     flow = filters.get("flow")
     if flow and flow.details.get("co_buy_ratio", 0) >= 0.7:
         out.append({"type": "STRONG_FLOW", "score": 8})
+    # 차트 패턴: 1년선 위 + 5일선 위 + 최근 조정 후 지지
+    tech = filters.get("technical")
+    if tech and isinstance(tech.details, dict):
+        pb = tech.details.get("pullback_pattern") or {}
+        if pb.get("matched"):
+            entry: dict[str, Any] = {"type": "PULLBACK_AT_MA250_SUPPORT", "score": 12}
+            if pb.get("ma250"):
+                entry["ma250"] = pb["ma250"]
+            if pb.get("ma5"):
+                entry["ma5"] = pb["ma5"]
+            if pb.get("recent_pullback_pct") is not None:
+                entry["recent_pullback_pct"] = pb["recent_pullback_pct"]
+            out.append(entry)
     return out
 
 

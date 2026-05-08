@@ -63,6 +63,9 @@ def analyze(daily_ohlcv: pd.DataFrame) -> FilterResult:
         and last[CLOSE_COL] > weekly.iloc[-2][OPEN_COL]
     )
 
+    # 추가: "추세 위 + 조정 후 지지" 차트 패턴 (1년선 위 + 5일선 위 + 최근 조정).
+    pullback = detect_pullback_at_ma250_support(daily_ohlcv)
+
     if above_ma60w and 30 <= rsi14 <= 70 and bullish_engulf:
         grade, score = GREEN, 90
     elif above_ma60w and 30 <= rsi14 <= 75:
@@ -71,6 +74,12 @@ def analyze(daily_ohlcv: pd.DataFrame) -> FilterResult:
         grade, score = YELLOW, 60
     else:
         grade, score = RED, 30
+
+    # 패턴 매칭 시 boost (단, RED 면 boost X)
+    if pullback["matched"] and grade != RED:
+        score = min(95, score + 8)
+        if grade == YELLOW:
+            grade = GREEN
 
     return FilterResult(
         grade=grade,
@@ -81,6 +90,7 @@ def analyze(daily_ohlcv: pd.DataFrame) -> FilterResult:
             "bullish_engulf": bullish_engulf,
             "last_close": float(last[CLOSE_COL]),
             "ma60w": float(ma60w),
+            "pullback_pattern": pullback,
         },
     )
 
@@ -92,3 +102,81 @@ def moving_averages_daily(daily_ohlcv: pd.DataFrame) -> dict[str, int | None]:
     ma10 = daily_ohlcv[CLOSE_COL].rolling(10).mean().iloc[-1]
     ma15 = daily_ohlcv[CLOSE_COL].rolling(15).mean().iloc[-1]
     return {"ma10": int(ma10), "ma15": int(ma15)}
+
+
+def detect_pullback_at_ma250_support(
+    daily_ohlcv: pd.DataFrame,
+    pullback_lookback_days: int = 60,
+    pullback_threshold_pct: float = 15.0,
+) -> dict:
+    """
+    "추세 위 + 조정 후 지지" 패턴 감지.
+
+    조건:
+      1. 현재가 > MA250 (1년선 위 = 장기 상승 추세)
+      2. 현재가 > MA5 (단기 반등/지지)
+      3. 최근 pullback_lookback_days 일 (default 60일 ~ 3개월) 내에 가격이
+         MA250 까지 가까워진 흔적이 있음 — 종가-MA250 의 거리 (%) 가
+         0 ~ pullback_threshold_pct (default 15%) 사이로 눌렸음.
+         즉 "추세 라인까지 한 번 눌렸다가 다시 올라온" 패턴.
+
+    셋 다 True 면 매수 후보 패턴.
+
+    반환:
+      {
+        "matched": bool,
+        "above_ma250": bool,
+        "above_ma5": bool,
+        "recent_pullback_pct": float | None  (최근 lookback 의 MA250 까지 최저 거리 %),
+        "ma5": int | None,
+        "ma250": int | None,
+        "current": int,
+      }
+    """
+    out = {
+        "matched": False,
+        "above_ma250": False,
+        "above_ma5": False,
+        "recent_pullback_pct": None,
+        "ma5": None,
+        "ma250": None,
+        "current": None,
+    }
+    if daily_ohlcv is None or len(daily_ohlcv) < 250:
+        return out
+
+    closes = daily_ohlcv[CLOSE_COL]
+    ma5 = closes.rolling(5).mean()
+    ma250 = closes.rolling(250).mean()
+
+    cur = float(closes.iloc[-1])
+    cur_ma5 = float(ma5.iloc[-1])
+    cur_ma250 = float(ma250.iloc[-1])
+
+    out["current"] = int(cur)
+    out["ma5"] = int(cur_ma5)
+    out["ma250"] = int(cur_ma250)
+    out["above_ma5"] = cur > cur_ma5
+    out["above_ma250"] = cur > cur_ma250
+
+    # 최근 N일 내 MA250 까지 거리 최소값 (= 가장 가까이 눌렸을 때)
+    recent_closes = closes.iloc[-pullback_lookback_days:]
+    recent_ma250 = ma250.iloc[-pullback_lookback_days:]
+    if len(recent_closes) and len(recent_ma250):
+        # (close - ma250) / ma250 의 최소 거리 (%). 음수면 ma250 깼다는 뜻.
+        rel = ((recent_closes - recent_ma250) / recent_ma250 * 100).dropna()
+        if len(rel):
+            min_rel = float(rel.min())
+            out["recent_pullback_pct"] = round(min_rel, 2)
+            recent_pulled_in = 0 <= min_rel <= pullback_threshold_pct
+        else:
+            recent_pulled_in = False
+    else:
+        recent_pulled_in = False
+
+    out["matched"] = (
+        out["above_ma250"]
+        and out["above_ma5"]
+        and recent_pulled_in
+    )
+    return out
