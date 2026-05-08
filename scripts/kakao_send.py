@@ -163,6 +163,68 @@ def filter_sparkline(nine) -> str:
     return " ".join(parts)
 
 
+def _detail_bits(fdetails: dict) -> list[str]:
+    """nine_filter_details 에서 의미있는 메타 짧게 추출. 핵심만 한 줄용."""
+    bits = []
+
+    # 해자: ROE/EPS 성장
+    moat = fdetails.get("moat") or {}
+    if moat.get("roe_avg") is not None:
+        roe = moat["roe_avg"]
+        wl = "★" if moat.get("in_whitelist") else ""
+        bits.append(f"ROE{roe:.0f}%{wl}")
+
+    # 재무 추세
+    ft = fdetails.get("financial_trend") or {}
+    if ft.get("op_loss_streak", 0) >= 2:
+        bits.append(f"영익적자{ft['op_loss_streak']}분기")
+
+    # 건전성
+    qh = fdetails.get("quant_health") or {}
+    if qh.get("debt_ratio") is not None:
+        d = qh["debt_ratio"]
+        if d >= 1.5:
+            bits.append(f"부채{d:.1f}배")
+
+    # 수급
+    flow = fdetails.get("flow") or {}
+    co = flow.get("co_buy_days")
+    if co is not None and co >= 5:
+        bits.append(f"외인+기관 동반매수 {co}일")
+
+    # 신용/공매
+    cs = fdetails.get("credit_short") or {}
+    if cs.get("in_short_top10"):
+        bits.append("공매도 Top10")
+
+    # 연금
+    nps = fdetails.get("nps") or {}
+    cat = nps.get("category")
+    if cat in ("신규", "확대", "축소대폭", "전량매도"):
+        prev_pct = nps.get("prev_pct")
+        curr_pct = nps.get("curr_pct")
+        if prev_pct is not None and curr_pct is not None:
+            bits.append(f"연금 {prev_pct:.1f}→{curr_pct:.1f}%")
+        elif curr_pct is not None:
+            bits.append(f"연금 신규 {curr_pct:.1f}%")
+
+    # 기술
+    tech = fdetails.get("technical") or {}
+    if tech.get("pullback_pattern", {}).get("matched"):
+        bits.append("1년선 위 조정 후 지지")
+    elif tech.get("above_ma60w") is True and tech.get("rsi14_weekly") is not None:
+        rsi = tech["rsi14_weekly"]
+        bits.append(f"60주선↑ RSI{rsi:.0f}")
+
+    # 리포트
+    rep = fdetails.get("report") or {}
+    pc = rep.get("positive_count", 0)
+    if pc >= 2:
+        bits.append(f"애널 매수 {pc}건")
+
+    return bits[:5]  # 너무 길면 잘라줌
+
+
 def positives_summary(pos, neg, max_items: int = 3):
     """positive/negative_signals 배열 → 한국어 라벨 + 점수 리스트."""
     pos_lines = []
@@ -304,19 +366,26 @@ def daily_message() -> str:
                 score = s.get("score", "?")
                 sig = s.get("signal", "")
                 lines.append(f"{i}. {name} ({code}) {score}점 [{sig}]")
-                # 9중 필터 — 강점 2 + 약점 2 (한 줄 압축)
-                fdetails = s.get("nine_filter_scores") or {}
+                # 9중 필터 점수 두 줄 + 핵심 디테일 한 줄
+                fscores = s.get("nine_filter_scores") or {}
+                fdetails = s.get("nine_filter_details") or {}
+                if fscores:
+                    LABEL_ORDER = [
+                        ("financial_trend", "재무"), ("quant_health", "건전"),
+                        ("margin_diagnosis", "마진"), ("moat", "해자"),
+                        ("flow", "수급"), ("credit_short", "공매"),
+                        ("nps", "연금"), ("technical", "기술"), ("report", "리포트"),
+                    ]
+                    parts = [f"{lab}{int(fscores.get(k, 0))}" for k, lab in LABEL_ORDER]
+                    lines.append("   " + " ".join(parts[:5]))
+                    lines.append("   " + " ".join(parts[5:]))
+
+                # 핵심 디테일 한 줄: 각 필터의 가장 의미있는 메타 한 마디
                 if fdetails:
-                    LABEL = {
-                        "financial_trend": "재무", "quant_health": "건전",
-                        "margin_diagnosis": "마진", "moat": "해자",
-                        "flow": "수급", "credit_short": "공매",
-                        "nps": "연금", "technical": "기술", "report": "리포트",
-                    }
-                    items = sorted(fdetails.items(), key=lambda x: int(x[1]), reverse=True)
-                    top2 = [f"{LABEL.get(k, k)}{int(v)}" for k, v in items[:2]]
-                    bot2 = [f"{LABEL.get(k, k)}{int(v)}" for k, v in items[-2:]]
-                    lines.append(f"   강점 {' '.join(top2)} · 약점 {' '.join(bot2)}")
+                    bits = _detail_bits(fdetails)
+                    if bits:
+                        lines.append("   📋 " + " · ".join(bits))
+
                 pos, neg = positives_summary(s.get("positive_signals"), s.get("negative_signals"))
                 if pos:
                     lines.append("   👍 " + ", ".join(pos))

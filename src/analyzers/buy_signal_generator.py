@@ -139,6 +139,7 @@ def generate(
 ) -> dict[str, Any]:
     nine = {k: filters[k].grade for k in NINE_FILTER_KEYS if k in filters}
     nine_scores = {k: int(filters[k].score) for k in NINE_FILTER_KEYS if k in filters}
+    nine_details = {k: dict(filters[k].details or {}) for k in NINE_FILTER_KEYS if k in filters}
     weights = {k: 1 for k in NINE_FILTER_KEYS}
     weights["report"] = 0.8  # report 비중 약간 낮춤
     score_num = sum(filters[k].score * weights[k] for k in nine) if nine else 0
@@ -164,6 +165,7 @@ def generate(
         "score": score,
         "nine_filter": nine,
         "nine_filter_scores": nine_scores,
+        "nine_filter_details": nine_details,
         "positive_signals": _collect_positive(filters),
         "negative_signals": _collect_negative(filters),
         "blocked": blocked,
