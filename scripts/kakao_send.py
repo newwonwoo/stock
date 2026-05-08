@@ -304,28 +304,19 @@ def daily_message() -> str:
                 score = s.get("score", "?")
                 sig = s.get("signal", "")
                 lines.append(f"{i}. {name} ({code}) {score}점 [{sig}]")
-                # 9중 필터 요소별 점수 (모바일 두 줄)
+                # 9중 필터 — 강점 2 + 약점 2 (한 줄 압축)
                 fdetails = s.get("nine_filter_scores") or {}
-                if not fdetails:
-                    # buy_signal_generator 가 score 만 노출하고 details 안 박는 경우
-                    # nine_filter (이모지) 만 fallback
-                    nf = s.get("nine_filter") or {}
-                    if nf:
-                        order = ["financial_trend", "quant_health", "margin_diagnosis",
-                                 "moat", "flow", "credit_short", "nps", "technical", "report"]
-                        labels = ["재무", "건전", "마진", "해자", "수급", "공매", "연금", "기술", "리포트"]
-                        emojis = [nf.get(k, "·") for k in order]
-                        l1 = " ".join(f"{lab}{em}" for lab, em in zip(labels[:5], emojis[:5]))
-                        l2 = " ".join(f"{lab}{em}" for lab, em in zip(labels[5:], emojis[5:]))
-                        lines.append(f"   {l1}")
-                        lines.append(f"   {l2}")
-                else:
-                    order = ["financial_trend", "quant_health", "margin_diagnosis",
-                             "moat", "flow", "credit_short", "nps", "technical", "report"]
-                    labels = ["재무", "건전", "마진", "해자", "수급", "공매", "연금", "기술", "리포트"]
-                    parts = [f"{lab}{int(fdetails.get(k, 0))}" for lab, k in zip(labels, order)]
-                    lines.append(f"   {' '.join(parts[:5])}")
-                    lines.append(f"   {' '.join(parts[5:])}")
+                if fdetails:
+                    LABEL = {
+                        "financial_trend": "재무", "quant_health": "건전",
+                        "margin_diagnosis": "마진", "moat": "해자",
+                        "flow": "수급", "credit_short": "공매",
+                        "nps": "연금", "technical": "기술", "report": "리포트",
+                    }
+                    items = sorted(fdetails.items(), key=lambda x: int(x[1]), reverse=True)
+                    top2 = [f"{LABEL.get(k, k)}{int(v)}" for k, v in items[:2]]
+                    bot2 = [f"{LABEL.get(k, k)}{int(v)}" for k, v in items[-2:]]
+                    lines.append(f"   강점 {' '.join(top2)} · 약점 {' '.join(bot2)}")
                 pos, neg = positives_summary(s.get("positive_signals"), s.get("negative_signals"))
                 if pos:
                     lines.append("   👍 " + ", ".join(pos))
