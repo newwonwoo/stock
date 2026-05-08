@@ -282,28 +282,36 @@ def daily_message() -> str:
     lines.append("💡 매수 추천 사유:")
     if buys:
         signals = buys.get("signals") or []
-        # STRONG_BUY 우선, 없으면 BUY 까지 fallback. 둘 다 없으면 score 상위 3개 (HOLD 라도).
+        # 1차: STRONG_BUY + BUY (blocked 제외, score 내림차순)
         strong = [s for s in signals if s.get("signal") == "STRONG_BUY" and not s.get("blocked")]
         buy_sigs = [s for s in signals if s.get("signal") == "BUY" and not s.get("blocked")]
         candidates = strong + buy_sigs
-        if not candidates:
-            # score 상위 3개로 fallback (HOLD 라도 정보 제공)
-            non_blocked = [s for s in signals if not s.get("blocked")]
-            non_blocked.sort(key=lambda x: x.get("score", 0), reverse=True)
-            candidates = non_blocked[:3]
-            if candidates:
-                lines.append("(STRONG_BUY/BUY 부재 — 상위 3종목 노출)")
+        candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        # 2차: 5개 안 차면 HOLD/그 외 score 상위로 채움
+        if len(candidates) < 5:
+            seen = {id(s) for s in candidates}
+            extras = [s for s in signals if id(s) not in seen and not s.get("blocked")]
+            extras.sort(key=lambda x: x.get("score", 0), reverse=True)
+            candidates += extras[: 5 - len(candidates)]
 
         if not candidates:
-            lines.append("관망 (모든 종목 차단/저점)")
+            lines.append("관망 (모든 종목 차단)")
         else:
             for i, s in enumerate(candidates[:5], 1):
                 name = s.get("name", "")
                 code = s.get("code", "")
                 score = s.get("score", "?")
                 sig = s.get("signal", "")
-                # score 옆에 signal 라벨 표시 (가독성)
                 lines.append(f"{i}. {name} ({code}) {score}점 [{sig}]")
+                # 9중 필터 한 줄 (이모지)
+                nf = s.get("nine_filter") or {}
+                if nf:
+                    order = ["financial_trend", "quant_health", "margin_diagnosis",
+                             "moat", "flow", "credit_short", "nps", "technical", "report"]
+                    short = "재무/건전/마진/해자/수급/공매/연금/기술/리포트"
+                    emojis = "".join(nf.get(k, "·") for k in order)
+                    lines.append(f"   {emojis}  ({short})")
                 pos, neg = positives_summary(s.get("positive_signals"), s.get("negative_signals"))
                 if pos:
                     lines.append("   👍 " + ", ".join(pos))
