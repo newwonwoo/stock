@@ -628,10 +628,26 @@ def send_to_self(access_token: str, text: str) -> dict:
 
 # ---------------------------- main ----------------------------
 
+def test_message() -> str:
+    """E2E 발송 테스트용. 데이터 fetch 없이 하드코딩 메시지."""
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        f"[원우 아빠 시스템 테스트 — {now}]\n"
+        "🛠️ 카카오 발송 파이프라인 작동 확인.\n"
+        "이 메시지가 도착하면:\n"
+        "  - GitHub Actions 워크플로우 OK\n"
+        "  - KAKAO_REST_API_KEY / REFRESH_TOKEN OK\n"
+        "  - talk_message API OK\n"
+        "데이터 수집 (DART/KRX) 은 별도 검증.\n"
+        "\n— Claude (research test)"
+    )
+
+
 BUILDERS = {
     "daily": daily_message,
     "weekly": weekly_message,
     "monthly": monthly_message,
+    "test": test_message,
 }
 
 
