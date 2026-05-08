@@ -232,14 +232,28 @@ def daily_message() -> str:
         try:
             if ind.get("kospi_change") is not None:
                 parts.append(f"KOSPI {fmt_signed(float(ind['kospi_change']))}%")
-            if ind.get("foreign_kospi_net") is not None:
-                parts.append(f"외인 {fmt_signed(float(ind['foreign_kospi_net']), 0)}억")
+            # 원 단위 → 억 단위 변환 (1e8 으로 나눔)
+            fn = ind.get("foreign_kospi_net")
+            if fn is not None:
+                parts.append(f"외인 {fmt_signed(float(fn) / 1e8, 0)}억")
+            inst = ind.get("institution_kospi_net")
+            if inst is not None:
+                parts.append(f"기관 {fmt_signed(float(inst) / 1e8, 0)}억")
             if ind.get("usd_krw") is not None:
                 parts.append(f"USDKRW {int(float(ind['usd_krw']))}")
         except (TypeError, ValueError):
             pass
         if parts:
             lines.append("📊 " + " / ".join(parts))
+        # 시장 거래대금 (조 단위)
+        tv = ind.get("total_kospi_value")
+        if tv:
+            try:
+                tv_jo = float(tv) / 1e12
+                if tv_jo >= 0.1:
+                    lines.append(f"💰 KOSPI 거래대금: {tv_jo:.1f}조원")
+            except (TypeError, ValueError):
+                pass
         if macro.get("__hmac_invalid"):
             lines.append("⚠️ HMAC 검증 실패")
     else:

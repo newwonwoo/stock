@@ -81,11 +81,13 @@ def _telegram_messages() -> list[dict[str, Any]]:
 
 
 def _krx_macro_indicators() -> dict[str, float]:
-    """KOSPI / KOSDAQ 변화율 + 외인 순매수 + USD/KRW. KRX (pykrx + FDR) 만 사용."""
+    """KOSPI / KOSDAQ 변화율 + 외인 + 기관 순매수 + 거래대금 + USD/KRW."""
     out: dict[str, float] = {
         "kospi_change": 0.0,
         "kosdaq_change": 0.0,
         "foreign_kospi_net": 0.0,
+        "institution_kospi_net": 0.0,
+        "total_kospi_value": 0.0,
         "usd_krw": 0.0,
     }
     try:
@@ -101,7 +103,15 @@ def _krx_macro_indicators() -> dict[str, float]:
     except Exception as e:
         log.info(f"KOSPI 외인순매수 실패: {e}")
     try:
-        out["usd_krw"] = krx_fetcher.fetch_usdkrw()  # fallback for market closed days
+        out["institution_kospi_net"] = krx_fetcher.fetch_kospi_institution_net()
+    except Exception as e:
+        log.info(f"KOSPI 기관순매수 실패: {e}")
+    try:
+        out["total_kospi_value"] = krx_fetcher.fetch_kospi_total_value()
+    except Exception as e:
+        log.info(f"KOSPI 거래대금 실패: {e}")
+    try:
+        out["usd_krw"] = krx_fetcher.fetch_usdkrw()
     except Exception as e:
         log.info(f"USD/KRW 실패: {e}")
     return out
@@ -291,6 +301,8 @@ def main() -> int:
         kosdaq_change=macro_ind["kosdaq_change"],
         usd_krw=macro_ind["usd_krw"],
         foreign_kospi_net=macro_ind["foreign_kospi_net"],
+        institution_kospi_net=macro_ind["institution_kospi_net"],
+        total_kospi_value=macro_ind["total_kospi_value"],
         claude_opinion_short="자동 생성 (지표 일부 미수집)",
     )
     if isinstance(macro_payload, dict):

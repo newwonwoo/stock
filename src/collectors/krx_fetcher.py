@@ -438,10 +438,12 @@ def fetch_index_change(index_ticker: str, d: date | None = None) -> float:
     return round((last - prev) / prev * 100, 2)
 
 
-def fetch_kospi_foreign_net(d: date | None = None) -> float:
-    """KOSPI 시장 전체 외인 순매수 (당일, 원). 미지원 시 0.
+def _kospi_investor_value(investor_keyword: str, exclude: str = "기타", d: date | None = None) -> float:
+    """
+    pykrx 의 get_market_trading_value_by_investor 응답에서 특정 투자자의 순매수 (원).
 
-    fallback for market closed days: 휴장이면 직전 영업일로 최대 10회 재시도.
+    응답 형식: index = 투자자명 ("외국인합계", "기관합계", "개인", ...), columns = 매도/매수/순매수.
+    fallback for market closed days.
     """
     end = _resolve_date(d)
     fn = getattr(pykrx_stock, "get_market_trading_value_by_investor", None)
@@ -456,17 +458,61 @@ def fetch_kospi_foreign_net(d: date | None = None) -> float:
             return 0.0
         if df is None or df.empty:
             return 0.0
-        foreign_col = next(
-            (c for c in df.columns if "외국인" in c and "기타" not in c), None
-        )
-        if not foreign_col:
+        # 인덱스에서 매칭 행 (예: "외국인합계", "기관합계", "전체")
+        rows = [i for i in df.index if investor_keyword in str(i) and (not exclude or exclude not in str(i))]
+        if not rows:
             return 0.0
+        row = df.loc[rows[0]]
+        # 순매수 컬럼 우선
+        for col in ("순매수", "거래대금"):
+            if col in df.columns:
+                try:
+                    return float(row[col])
+                except Exception:
+                    continue
+        return 0.0
+
+    val, _used = _fetch_with_fallback(_call, end)
+    return float(val) if val is not None else 0.0
+
+
+def fetch_kospi_foreign_net(d: date | None = None) -> float:
+    """KOSPI 외인 순매수 (원). 휴장 시 직전 영업일."""
+    return _kospi_investor_value("외국인", exclude="기타", d=d)
+
+
+def fetch_kospi_institution_net(d: date | None = None) -> float:
+    """KOSPI 기관 순매수 (원). 휴장 시 직전 영업일."""
+    return _kospi_investor_value("기관", exclude="", d=d)
+
+
+def fetch_kospi_total_value(d: date | None = None) -> float:
+    """KOSPI 시장 전체 거래대금 (원, 매수+매도 합 = 거래대금 row의 매수)."""
+    end = _resolve_date(d)
+    fn = getattr(pykrx_stock, "get_market_trading_value_by_investor", None)
+    if fn is None:
+        return 0.0
+
+    def _call(day: date) -> float:
         try:
-            return float(df[foreign_col].sum())
+            df = fn(fmt_compact(day), fmt_compact(day), "KOSPI")
         except Exception:
             return 0.0
+        if df is None or df.empty:
+            return 0.0
+        rows = [i for i in df.index if str(i) in ("전체", "합계")]
+        if not rows:
+            return 0.0
+        row = df.loc[rows[0]]
+        # 매수 + 매도 (= 거래대금) 또는 명시 거래대금 컬럼
+        if "매수" in df.columns and "매도" in df.columns:
+            try:
+                return float(row["매수"]) + float(row["매도"])
+            except Exception:
+                pass
+        return 0.0
 
-    val, _used = _fetch_with_fallback(_call, end)  # fallback for market closed days
+    val, _ = _fetch_with_fallback(_call, end)
     return float(val) if val is not None else 0.0
 
 

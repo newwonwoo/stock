@@ -32,6 +32,8 @@ def generate(
     usd_krw: float = 0.0,
     us_10y_yield: float = 0.0,
     foreign_kospi_net: float = 0.0,
+    institution_kospi_net: float = 0.0,
+    total_kospi_value: float = 0.0,
     events_today: list[dict[str, Any]] | None = None,
     claude_opinion_short: str = "",
 ) -> dict[str, Any]:
@@ -46,6 +48,8 @@ def generate(
             "usd_krw": usd_krw,
             "us_10y_yield": us_10y_yield,
             "foreign_kospi_net": foreign_kospi_net,
+            "institution_kospi_net": institution_kospi_net,
+            "total_kospi_value": total_kospi_value,
         },
         "events_today": events_today or [],
         "claude_opinion_short": claude_opinion_short,
