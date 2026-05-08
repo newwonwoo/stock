@@ -33,11 +33,13 @@ NINE_FILTER_KEYS = (
 
 
 def _signal(score: int, has_red: bool) -> str:
-    if has_red and score < 75:
+    # 임계값 보정 (DART/텔레그램 등 일부 필터 미수집 상태에서도 신호 노출).
+    # 데이터 quality 100% 회복 시 STRONG_BUY=85, BUY=70 으로 다시 올릴 것.
+    if has_red and score < 70:
         return "AVOID"
-    if score >= 90:
+    if score >= 80:
         return "STRONG_BUY"
-    if score >= 70:
+    if score >= 65:
         return "BUY"
     if score >= 50:
         return "HOLD"

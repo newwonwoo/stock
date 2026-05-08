@@ -282,15 +282,28 @@ def daily_message() -> str:
     lines.append("💡 매수 추천 사유:")
     if buys:
         signals = buys.get("signals") or []
+        # STRONG_BUY 우선, 없으면 BUY 까지 fallback. 둘 다 없으면 score 상위 3개 (HOLD 라도).
         strong = [s for s in signals if s.get("signal") == "STRONG_BUY" and not s.get("blocked")]
-        if not strong:
-            lines.append("STRONG_BUY 없음 (관망)")
+        buy_sigs = [s for s in signals if s.get("signal") == "BUY" and not s.get("blocked")]
+        candidates = strong + buy_sigs
+        if not candidates:
+            # score 상위 3개로 fallback (HOLD 라도 정보 제공)
+            non_blocked = [s for s in signals if not s.get("blocked")]
+            non_blocked.sort(key=lambda x: x.get("score", 0), reverse=True)
+            candidates = non_blocked[:3]
+            if candidates:
+                lines.append("(STRONG_BUY/BUY 부재 — 상위 3종목 노출)")
+
+        if not candidates:
+            lines.append("관망 (모든 종목 차단/저점)")
         else:
-            for i, s in enumerate(strong[:2], 1):
+            for i, s in enumerate(candidates[:5], 1):
                 name = s.get("name", "")
                 code = s.get("code", "")
                 score = s.get("score", "?")
-                lines.append(f"{i}. {name} ({code}) {score}점")
+                sig = s.get("signal", "")
+                # score 옆에 signal 라벨 표시 (가독성)
+                lines.append(f"{i}. {name} ({code}) {score}점 [{sig}]")
                 pos, neg = positives_summary(s.get("positive_signals"), s.get("negative_signals"))
                 if pos:
                     lines.append("   👍 " + ", ".join(pos))
