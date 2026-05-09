@@ -186,8 +186,14 @@ def _dart_filters(
 
     try:
         major = fetcher.fetch_major_stock_changes(corp_code)
-        prev_pct, curr_pct = extract_nps_holding_change(major)
-        out["nps"] = nps_tracker.analyze(prev_pct, curr_pct)
+        nps_change = extract_nps_holding_change(major)
+        out["nps"] = nps_tracker.analyze(
+            nps_change.prev_pct,
+            nps_change.curr_pct,
+            latest_bsis_de=nps_change.latest_bsis_de,
+            latest_rcept_dt=nps_change.latest_rcept_dt,
+            first_buy_de=nps_change.first_buy_de,
+        )
     except Exception as e:
         log.info(f"DART NPS 실패 corp={corp_code}: {e}")
         out["nps"] = skipped("DART_nps_failed")
@@ -277,7 +283,14 @@ def main() -> int:
                 details={"in_whitelist": t.code in _whitelist_codes()},
             ),
             "flow": flow_analysis.analyze(inv, fo) if not inv.empty else FilterResult(YELLOW, 50, {"reason": "no_flow"}),
-            "credit_short": credit_short.analyze(t.code, short_top_codes),
+            # TODO: short_interest_ratio (종목별 공매도 잔고/시총) 실 fetch 추가 — 별도 commit.
+            # 지금은 legacy Top10 매칭 메타만 박제 (점수 영향 X), 잔고율 None → GREEN/70 보수적.
+            "credit_short": credit_short.analyze(
+                t.code,
+                short_interest_ratio=None,
+                credit_ratio=None,
+                legacy_short_top10_codes=short_top_codes,
+            ),
             "nps": dart_results["nps"],
             "technical": technical.analyze(ohlcv),
             "report": report_momentum.analyze(t.code, tg_msgs),
