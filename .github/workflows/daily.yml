@@ -64,18 +64,23 @@ jobs:
       KRX_PW: ${{ secrets.KRX_PW }}
       EC2_INCOMING: /home/ec2-user/trading-bot/data/research/incoming
       EC2_FINAL: /home/ec2-user/trading-bot/data/research
+      VENV_DIR: /home/ec2-user/.venv-stock
       PYTHONPATH: ${{ github.workspace }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
+      # self-hosted runner — 시스템 python3.11 + 영구 venv 사용. actions/setup-python 미사용.
+      - name: Setup venv on self-hosted runner
+        run: |
+          if [ ! -d "$VENV_DIR" ]; then
+            python3.11 -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/pip" install --upgrade pip
+          fi
+          "$VENV_DIR/bin/pip" install -r requirements.txt
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Prepend venv to PATH
+        run: echo "$VENV_DIR/bin" >> $GITHUB_PATH
 
       - name: DART smoke
         if: ${{ env.DART_API_KEY != '' }}
