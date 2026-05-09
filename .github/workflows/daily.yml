@@ -2,6 +2,12 @@ name: Daily Collectors
 
 on:
   workflow_dispatch:
+    inputs:
+      force_run:
+        description: "휴장일 무시하고 강제 실행 (테스트용)"
+        type: boolean
+        required: false
+        default: false
   schedule:
     # 매일 07:00 KST = 22:00 UTC 발동.
     # 단 check-holiday 가 KST today_kst() (= 봇이 그날 장에서 사용할 날)
@@ -17,15 +23,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: check
+        env:
+          FORCE_RUN: ${{ github.event.inputs.force_run }}
         run: |
           python - <<'PY'
           import os, sys
           sys.path.insert(0, ".")
           from src.utils.kst_time import is_business_day, today_kst
+          force = os.environ.get("FORCE_RUN", "false").lower() == "true"
           today = today_kst()
-          skip = "true" if not is_business_day(today) else "false"
-          if skip == "true":
-              print(f"::notice::{today} 휴장 — collect 잡 skip")
+          if force:
+              skip = "false"
+              print(f"::notice::force_run=True — 휴일 체크 우회 (today={today})")
+          else:
+              skip = "true" if not is_business_day(today) else "false"
+              if skip == "true":
+                  print(f"::notice::{today} 휴장 — collect 잡 skip")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"skip={skip}\n")
           PY
