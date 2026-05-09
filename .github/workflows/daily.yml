@@ -46,7 +46,7 @@ jobs:
   collect:
     needs: check-holiday
     if: needs.check-holiday.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, krx]
     timeout-minutes: 30
 
     env:
@@ -153,22 +153,13 @@ jobs:
               sys.exit(1)
           PY
 
-      - name: Prepare SSH key
+      # self-hosted runner = 봇 EC2 자기 자신.
+      # SSH/SCP 불필요 — 같은 파일시스템이라 mkdir + cp + atomic mv 로 처리.
+      - name: Ensure local research directories
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
-          chmod 600 ~/.ssh/ec2_key
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+        run: mkdir -p "$EC2_INCOMING" "$EC2_FINAL"
 
-      - name: Ensure EC2 directories
-        if: ${{ env.RESEARCH_HMAC_KEY != '' }}
-        run: |
-          ssh -i ~/.ssh/ec2_key \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-            "mkdir -p '${EC2_INCOMING}' '${EC2_FINAL}'"
-
-      - name: SCP signed JSONs to EC2 incoming
+      - name: Copy signed JSONs to local incoming
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
         run: |
           shopt -s nullglob
@@ -176,36 +167,33 @@ jobs:
           if [ ${#files[@]} -eq 0 ]; then
             echo "no signed files to push"; exit 0
           fi
-          scp -i ~/.ssh/ec2_key "${files[@]}" \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${EC2_INCOMING}/
+          cp -v "${files[@]}" "$EC2_INCOMING/"
 
       - name: Atomic move incoming -> final
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
         run: |
-          ssh -i ~/.ssh/ec2_key \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-            "mv ${EC2_INCOMING}/*.json ${EC2_FINAL}/"
+          shopt -s nullglob
+          incoming=("$EC2_INCOMING"/*.json)
+          if [ ${#incoming[@]} -eq 0 ]; then
+            echo "no incoming files"; exit 0
+          fi
+          mv -v "${incoming[@]}" "$EC2_FINAL/"
 
-      - name: Verify arrival on EC2
+      - name: Verify local arrival
         if: ${{ env.RESEARCH_HMAC_KEY != '' }}
         run: |
-          REMOTE=$(ssh -i ~/.ssh/ec2_key \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-            "ls -1 ${EC2_FINAL}/*.json 2>/dev/null | xargs -n1 basename | sort")
-          echo "remote final files:"
-          echo "$REMOTE"
-          for f in $(ls out/ | grep -E '^(buy_signals_|macro_status_|blacklist_active)' | sort); do
-            if ! echo "$REMOTE" | grep -qx "$f"; then
-              echo "::error::missing on EC2: $f"; exit 1
+          shopt -s nullglob
+          ls -la "$EC2_FINAL/"
+          for f in $(ls out/ | grep -E '^(buy_signals_|macro_status_|blacklist_active|hot_sectors_)' | sort); do
+            if [ ! -f "$EC2_FINAL/$f" ]; then
+              echo "::error::missing on local final: $f"; exit 1
             fi
           done
-          INCOMING_LEFT=$(ssh -i ~/.ssh/ec2_key \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-            "ls -1 ${EC2_INCOMING}/*.json 2>/dev/null | wc -l")
-          if [ "$INCOMING_LEFT" != "0" ]; then
-            echo "::error::incoming/ 잔존 ${INCOMING_LEFT} — atomic mv 미완료"; exit 1
+          incoming_left=("$EC2_INCOMING"/*.json)
+          if [ ${#incoming_left[@]} -ne 0 ]; then
+            echo "::error::incoming/ 잔존 ${#incoming_left[@]} — atomic mv 미완료"; exit 1
           fi
-          echo "[ok] EC2 도착 확인"
+          echo "[ok] 로컬 도착 확인"
 
       - name: Upload artifacts
         if: always()
