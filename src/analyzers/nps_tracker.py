@@ -1,4 +1,4 @@
-"""필터 ⑦ NPS (국민연금) 분기 변동. 신규/확대/축소/매도 분류."""
+"""필터 ⑦ NPS (국민연금) 분기 변동. 신규/확대/축소/매도 분류 + 일자 박제."""
 
 from __future__ import annotations
 
@@ -22,9 +22,21 @@ def _classify(prev_pct: float | None, curr_pct: float | None) -> tuple[str, int]
     return "축소대폭", 25
 
 
-def analyze(prev_quarter_pct: float | None, curr_quarter_pct: float | None) -> FilterResult:
+def analyze(
+    prev_quarter_pct: float | None,
+    curr_quarter_pct: float | None,
+    *,
+    latest_bsis_de: str | None = None,
+    latest_rcept_dt: str | None = None,
+    first_buy_de: str | None = None,
+) -> FilterResult:
     """
     NPS 보유 비중 (%, 시가총액 대비). DART 대량보유 보고에서 추출.
+
+    선택 인자 (kakao_send 가 메시지에 노출):
+      latest_bsis_de  : 가장 최근 보고의 변동 기준일 (실제 매수/매도일)
+      latest_rcept_dt : DART 공시 접수일
+      first_buy_de    : NPS 가 처음 등장한 보고의 변동 기준일 (신규 편입 시작)
     """
     category, score = _classify(prev_quarter_pct, curr_quarter_pct)
 
@@ -42,5 +54,8 @@ def analyze(prev_quarter_pct: float | None, curr_quarter_pct: float | None) -> F
             "category": category,
             "prev_pct": prev_quarter_pct,
             "curr_pct": curr_quarter_pct,
+            "latest_bsis_de": latest_bsis_de,
+            "latest_rcept_dt": latest_rcept_dt,
+            "first_buy_de": first_buy_de,
         },
     )
