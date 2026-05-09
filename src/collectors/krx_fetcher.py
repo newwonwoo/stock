@@ -361,15 +361,22 @@ def fetch_foreign_ownership(code: str, days: int = 30, d: date | None = None) ->
     """외인 보유율 (%) 일별 추이. 실패 시 빈 DataFrame.
 
     fallback for market closed days: end 가 휴장이면 직전 영업일로 최대 10회 재시도.
+    pykrx 1.2.x 에 함수 없으면 즉시 빈 결과 (fallback 낭비 X).
     """
+    fn = getattr(pykrx_stock, "get_exhaustion_rates_of_foreign_investor", None)
+    if fn is None:
+        # pykrx 버전에 함수 없음 — fallback 무의미. 한 번만 로그 후 빈 결과.
+        log.info(
+            f"pykrx 에 get_exhaustion_rates_of_foreign_investor 없음 ({code}) — skip"
+        )
+        return pd.DataFrame()
+
     end = _resolve_date(d)
 
     def _call(day: date) -> pd.DataFrame:
         start = day - timedelta(days=days * 2 + 10)
         try:
-            df = pykrx_stock.get_exhaustion_rates_of_foreign_investor(
-                fmt_compact(start), fmt_compact(day), code
-            )
+            df = fn(fmt_compact(start), fmt_compact(day), code)
         except Exception as e:
             log.info(f"KRX foreign_ownership 실패 {code} day={day}: {e}")
             return pd.DataFrame()
