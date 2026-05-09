@@ -163,66 +163,182 @@ def filter_sparkline(nine) -> str:
     return " ".join(parts)
 
 
-def _detail_bits(fdetails: dict) -> list[str]:
-    """nine_filter_details 에서 의미있는 메타 짧게 추출. 핵심만 한 줄용."""
-    bits = []
+def _short_date(s: str | None) -> str | None:
+    """'YYYY-MM-DD' → 'M/D' 또는 'YYYY-MM-DD' 그대로 (None 안전)."""
+    if not s:
+        return None
+    s = str(s).strip()
+    if len(s) == 10 and s[4] == "-":
+        try:
+            return f"{int(s[5:7])}/{int(s[8:10])}"
+        except (TypeError, ValueError):
+            return s
+    return s
 
-    # 해자: ROE/EPS 성장
+
+def _detail_bits(fdetails: dict) -> list[str]:
+    """nine_filter_details → 카톡용 의미있는 메타 한 줄.
+
+    각 필터별 일자/구체 수치를 추출해 짧게 발화. 종목당 5~8 bits 정도.
+    """
+    bits: list[str] = []
+
+    # === ④ 해자 (moat) — ROE 평균 + std + EPS 성장 + 화이트리스트 ===
     moat = fdetails.get("moat") or {}
     if moat.get("roe_avg") is not None:
         roe = moat["roe_avg"]
         wl = "★" if moat.get("in_whitelist") else ""
-        bits.append(f"ROE{roe:.0f}%{wl}")
+        std = moat.get("roe_std")
+        eg = moat.get("eps_growth_5y")
+        bit = f"ROE{roe:.0f}%{wl}"
+        extras = []
+        if std is not None and std <= 5:
+            extras.append(f"안정σ{std:.1f}")
+        if eg is not None and eg >= 0.3:
+            extras.append(f"EPS+{eg*100:.0f}%/5y")
+        if extras:
+            bit += f" ({', '.join(extras)})"
+        bits.append(bit)
 
-    # 재무 추세
+    # === ① 재무 추세 (financial_trend) — 적자 streak / QoQ ===
     ft = fdetails.get("financial_trend") or {}
     if ft.get("op_loss_streak", 0) >= 2:
-        bits.append(f"영익적자{ft['op_loss_streak']}분기")
+        bits.append(f"영익적자 {ft['op_loss_streak']}분기 연속")
+    else:
+        # 직전 분기 매출/영익 변화율 (가장 최근 1개)
+        rev_qoq = ft.get("revenue_qoq") or []
+        op_qoq = ft.get("op_qoq") or []
+        if rev_qoq and op_qoq:
+            rev_last = rev_qoq[-1] * 100
+            op_last = op_qoq[-1] * 100
+            if abs(rev_last) >= 5 or abs(op_last) >= 5:
+                bits.append(f"매출 {rev_last:+.1f}%, 영익 {op_last:+.1f}% (QoQ)")
 
-    # 건전성
+    # === ② 정량 건전성 (quant_health) — DSO + 부채비율 + 수주잔고 ===
     qh = fdetails.get("quant_health") or {}
+    qh_bits = []
+    if qh.get("dso") is not None:
+        d = qh["dso"]
+        if d >= 90:
+            qh_bits.append(f"DSO {d:.0f}일↑")
+        elif d <= 45:
+            qh_bits.append(f"DSO {d:.0f}일 우수")
     if qh.get("debt_ratio") is not None:
-        d = qh["debt_ratio"]
-        if d >= 1.5:
-            bits.append(f"부채{d:.1f}배")
+        dr = qh["debt_ratio"]
+        if dr >= 1.5:
+            qh_bits.append(f"부채/자본 {dr:.1f}배")
+    if qh.get("backlog_ratio") is not None:
+        br = qh["backlog_ratio"]
+        if br >= 1.0:
+            qh_bits.append(f"수주잔고 {br:.1f}년")
+    if qh_bits:
+        bits.extend(qh_bits[:2])
 
-    # 수급
+    # === ③ 마진 진단 (margin_diagnosis) — OPM 변화 + 분류 ===
+    md = fdetails.get("margin_diagnosis") or {}
+    if md.get("opm_delta_pp") is not None:
+        delta = md["opm_delta_pp"]
+        cat = md.get("category")
+        if cat == "원가/경쟁":
+            bits.append(f"OPM {delta:+.1f}%pt (원가/경쟁)")
+        elif cat in ("CAPEX형", "R&D형", "신사업형") and delta < -0.5:
+            bits.append(f"OPM {delta:+.1f}%pt ({cat})")
+
+    # === ⑤ 수급 (flow_analysis) — 동반매수일 + 외인 보유율 변화 ===
     flow = fdetails.get("flow") or {}
     co = flow.get("co_buy_days")
     if co is not None and co >= 5:
-        bits.append(f"외인+기관 동반매수 {co}일")
+        ratio = flow.get("co_buy_ratio")
+        ratio_str = f" ({ratio*100:.0f}%)" if ratio is not None else ""
+        bits.append(f"외인+기관 동반매수 {co}일{ratio_str}")
+    fdelta = flow.get("foreign_delta_pp")
+    if fdelta is not None and abs(fdelta) >= 1:
+        bits.append(f"외인 보유율 {fdelta:+.2f}%pt (30일)")
 
-    # 신용/공매
+    # === ⑥ 공매도 (credit_short) — 잔고율 (절대 Top10 X) ===
     cs = fdetails.get("credit_short") or {}
-    if cs.get("in_short_top10"):
-        bits.append("공매도 Top10")
+    sir = cs.get("short_interest_ratio")
+    if sir is not None:
+        if sir >= 0.05:
+            bits.append(f"공매도 잔고 {sir*100:.1f}% ↑")
+        elif sir >= 0.03:
+            bits.append(f"공매도 잔고 {sir*100:.1f}%")
+    cr = cs.get("credit_ratio")
+    if cr is not None and cr >= 0.03:
+        bits.append(f"신용 {cr*100:.1f}%")
 
-    # 연금
+    # === ⑦ 연금 (nps_tracker) — 비중 변화 + 매수/편입 일자 ===
     nps = fdetails.get("nps") or {}
     cat = nps.get("category")
-    if cat in ("신규", "확대", "축소대폭", "전량매도"):
+    if cat in ("신규", "확대", "축소대폭", "전량매도", "축소소폭"):
         prev_pct = nps.get("prev_pct")
         curr_pct = nps.get("curr_pct")
-        if prev_pct is not None and curr_pct is not None:
-            bits.append(f"연금 {prev_pct:.1f}→{curr_pct:.1f}%")
+        latest = _short_date(nps.get("latest_bsis_de"))
+        first = _short_date(nps.get("first_buy_de"))
+        if cat == "신규" and curr_pct is not None:
+            bit = f"연금 신규 {curr_pct:.1f}%"
+            if first:
+                bit += f" (편입 {first})"
+            bits.append(bit)
+        elif prev_pct is not None and curr_pct is not None:
+            bit = f"연금 {prev_pct:.1f}→{curr_pct:.1f}%"
+            if latest:
+                bit += f" ({latest})"
+            bits.append(bit)
         elif curr_pct is not None:
-            bits.append(f"연금 신규 {curr_pct:.1f}%")
+            bits.append(f"연금 {curr_pct:.1f}%")
 
-    # 기술
+    # === ⑧ 기술적 (technical) — 60주선/RSI/풀백 ===
     tech = fdetails.get("technical") or {}
-    if tech.get("pullback_pattern", {}).get("matched"):
-        bits.append("1년선 위 조정 후 지지")
+    pb = tech.get("pullback_pattern") or {}
+    if pb.get("matched"):
+        ma250 = pb.get("ma250")
+        pull = pb.get("recent_pullback_pct")
+        bit = "1년선 위 조정 후 지지"
+        if pull is not None:
+            bit += f" (-{pull:.1f}% 터치)"
+        if ma250:
+            bit += f" / 1년선 {int(ma250):,}"
+        bits.append(bit)
     elif tech.get("above_ma60w") is True and tech.get("rsi14_weekly") is not None:
         rsi = tech["rsi14_weekly"]
-        bits.append(f"60주선↑ RSI{rsi:.0f}")
+        last = tech.get("last_close")
+        ma60 = tech.get("ma60w")
+        if last and ma60 and ma60 > 0:
+            margin = (last - ma60) / ma60 * 100
+            bits.append(f"60주선 +{margin:.0f}%, RSI {rsi:.0f}")
+        else:
+            bits.append(f"60주선↑ RSI{rsi:.0f}")
+    elif tech.get("above_ma60w") is False:
+        bits.append("60주선 ↓")
 
-    # 리포트
+    # === ⑨ 리포트 (report_momentum) — 매수 건수 + 최신 메시지 일자 ===
     rep = fdetails.get("report") or {}
     pc = rep.get("positive_count", 0)
-    if pc >= 2:
-        bits.append(f"애널 매수 {pc}건")
+    nc = rep.get("negative_count", 0)
+    tu = rep.get("target_up_count", 0)
+    matched = rep.get("matched_messages") or []
+    if pc >= 2 or tu >= 1 or nc >= 1:
+        bit_parts = []
+        if pc >= 1:
+            bit_parts.append(f"애널매수{pc}")
+        if tu >= 1:
+            bit_parts.append(f"목표가↑{tu}")
+        if nc >= 1:
+            bit_parts.append(f"매도{nc}")
+        # 가장 최근 매칭 메시지 일자
+        latest_iso = None
+        for m in matched:
+            d_iso = (m.get("date_iso") or "")[:10]
+            if d_iso and (latest_iso is None or d_iso > latest_iso):
+                latest_iso = d_iso
+        sd = _short_date(latest_iso)
+        bit = "리포트 " + "/".join(bit_parts)
+        if sd:
+            bit += f" (최근 {sd})"
+        bits.append(bit)
 
-    return bits[:5]  # 너무 길면 잘라줌
+    return bits[:8]  # 종목당 너무 길지 않게
 
 
 def positives_summary(pos, neg, max_items: int = 3):
