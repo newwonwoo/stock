@@ -4,7 +4,7 @@ DART 재무 응답 → 분석기 입력 변환.
 핵심 함수:
   - get_annual_snapshot(fetcher, corp_code, year) → AnnualSnapshot
   - get_recent_annuals(fetcher, corp_code, years=2) → list[AnnualSnapshot]
-  - extract_nps_holding_change(records) → (prev_pct, curr_pct)
+  - extract_nps_holding_change(records) → NpsChange (prev/curr/dates 포함)
 
 DART account_nm 매칭 키워드 (한국어 IFRS):
   - 매출: "매출액" / "수익(매출액)" / "영업수익"
@@ -43,6 +43,22 @@ class AnnualSnapshot:
         return (self.op_profit / self.revenue * 100) if self.revenue else 0.0
 
 
+@dataclass
+class NpsChange:
+    """국민연금 보유비중 변화 + 일자 메타.
+
+    prev_pct/curr_pct: stkrt (보유비율, %)
+    latest_bsis_de:    가장 최근 보고의 변동 기준일 (YYYYMMDD) — 실제 매수/매도일
+    latest_rcept_dt:   가장 최근 보고의 DART 공시 접수일
+    first_buy_de:      NPS 가 처음 등장한 보고의 변동 기준일 (신규 편입 시점)
+    """
+    prev_pct: float | None = None
+    curr_pct: float | None = None
+    latest_bsis_de: str | None = None
+    latest_rcept_dt: str | None = None
+    first_buy_de: str | None = None
+
+
 def _to_float(s: str | None) -> float:
     if not s:
         return 0.0
@@ -53,6 +69,18 @@ def _to_float(s: str | None) -> float:
         return float(s)
     except ValueError:
         return 0.0
+
+
+def _fmt_yyyymmdd(s: str | None) -> str | None:
+    """DART 의 'YYYYMMDD' → 'YYYY-MM-DD'. 빈 값/이상치는 None."""
+    if not s:
+        return None
+    s = s.strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s
+    return None
 
 
 def _find_account(items: list[dict], keywords: Iterable[str], sj_div: str | None = None) -> float:
@@ -124,19 +152,40 @@ def get_recent_annuals(
     return out
 
 
-def extract_nps_holding_change(major_holdings: list[dict]) -> tuple[float | None, float | None]:
+def extract_nps_holding_change(major_holdings: list[dict]) -> NpsChange:
     """
-    DART majorstock.json 의 list → (prev_pct, curr_pct).
-    국민연금공단 보고건만 필터, 가장 최근 2건의 stkrt(보유비율) 비교.
+    DART majorstock.json 의 list → NpsChange.
+
+    국민연금공단 보고건만 필터.
+    - 가장 최근 1건: curr_pct + latest_bsis_de (실제 매수/매도일) + latest_rcept_dt (공시일)
+    - 가장 오래된 1건: first_buy_de (신규편입 시점)
+    - 두 번째 최근 1건: prev_pct (직전 비중)
     """
     nps_records = [
         r for r in major_holdings
         if "국민연금" in (r.get("repror") or "") or "국민연금" in (r.get("ryp") or "")
     ]
+    out = NpsChange()
     if not nps_records:
-        return (None, None)
+        return out
+
     # rcept_dt (접수일) 내림차순.
     nps_records.sort(key=lambda r: (r.get("rcept_dt") or ""), reverse=True)
-    curr = _to_float(nps_records[0].get("stkrt"))
-    prev = _to_float(nps_records[1].get("stkrt")) if len(nps_records) > 1 else None
-    return (prev if prev else None, curr if curr else None)
+    latest = nps_records[0]
+    curr = _to_float(latest.get("stkrt"))
+    out.curr_pct = curr if curr else None
+    out.latest_bsis_de = _fmt_yyyymmdd(latest.get("bsis_de"))
+    out.latest_rcept_dt = _fmt_yyyymmdd(latest.get("rcept_dt"))
+
+    if len(nps_records) > 1:
+        prev = _to_float(nps_records[1].get("stkrt"))
+        out.prev_pct = prev if prev else None
+
+    # 가장 오래된 보고 = 신규 편입 시작 (첫 보고). bsis_de 우선, 없으면 rcept_dt.
+    oldest = nps_records[-1]
+    out.first_buy_de = (
+        _fmt_yyyymmdd(oldest.get("bsis_de"))
+        or _fmt_yyyymmdd(oldest.get("rcept_dt"))
+    )
+
+    return out
