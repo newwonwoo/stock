@@ -1,0 +1,56 @@
+{
+  "date": "2026-05-10",
+  "entry_reference_date": "2026-05-08",
+  "picks_count": 2,
+  "picks": [
+    {
+      "code": "373220",
+      "name": "LG에너지솔루션",
+      "signal": "BUY",
+      "score": 68,
+      "nine_filter": {
+        "financial_trend": "🟡",
+        "quant_health": "🟢",
+        "margin_diagnosis": "🟢",
+        "moat": "🟡",
+        "flow": "🟢",
+        "credit_short": "🟢",
+        "nps": "🟢",
+        "technical": "🟡",
+        "report": "🟡"
+      },
+      "moving_averages": {
+        "ma10": 473050,
+        "ma15": 463733
+      },
+      "reason_short": "NPS_NEW · 필터 5/9 통과",
+      "entry_date": "2026-05-08",
+      "entry_close": 476500
+    },
+    {
+      "code": "051910",
+      "name": "LG화학",
+      "signal": "BUY",
+      "score": 66,
+      "nine_filter": {
+        "financial_trend": "🟡",
+        "quant_health": "🟢",
+        "margin_diagnosis": "🟢",
+        "moat": "🟡",
+        "flow": "🟢",
+        "credit_short": "🟢",
+        "nps": "🟢",
+        "technical": "🟡",
+        "report": "🟡"
+      },
+      "moving_averages": {
+        "ma10": 406800,
+        "ma15": 395500
+      },
+      "reason_short": "NPS_ADD · 필터 5/9 통과",
+      "entry_date": "2026-05-08",
+      "entry_close": 429500
+    }
+  ],
+  "created_at": "2026-05-10T22:51:53+09:00"
+}
