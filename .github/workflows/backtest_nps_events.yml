@@ -1,0 +1,65 @@
+name: Backtest NPS Events
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_top_n:
+        description: "시총 상위 N (default 200)"
+        required: false
+        default: "200"
+      lookback_years:
+        description: "분석 대상 연수 (default 3)"
+        required: false
+        default: "3"
+      end_date:
+        description: "분석 종료일 YYYY-MM-DD (비우면 오늘)"
+        required: false
+        default: ""
+
+jobs:
+  backtest:
+    runs-on: [self-hosted, krx]
+    timeout-minutes: 60
+
+    env:
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      PYTHONPATH: ${{ github.workspace }}
+      BACKTEST_NPS_UNIVERSE_TOP_N: ${{ inputs.universe_top_n }}
+      BACKTEST_NPS_LOOKBACK_YEARS: ${{ inputs.lookback_years }}
+      BACKTEST_NPS_END_DATE: ${{ inputs.end_date }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Activate venv + verify
+        run: |
+          source /home/ec2-user/.venv-stock/bin/activate
+          python3 --version
+          python3 -c "from pykrx import stock; print('pykrx ok')"
+          python3 -c "import requests; print('requests ok')"
+
+      - name: Run NPS event-study backtest
+        run: |
+          source /home/ec2-user/.venv-stock/bin/activate
+          python3 scripts/backtest_nps_events.py
+
+      - name: Print summary
+        if: always()
+        run: |
+          ls -la out/backtest_nps_events_*.md 2>/dev/null || true
+          for f in out/backtest_nps_events_*.md; do
+            [ -e "$f" ] || continue
+            echo "===== $f ====="
+            cat "$f"
+          done
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-nps-events-${{ github.run_id }}
+          path: |
+            out/backtest_nps_events_*.md
+            out/backtest_nps_events_*.json
+          if-no-files-found: warn
+          retention-days: 30
