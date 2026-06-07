@@ -1,0 +1,32 @@
+{
+  "date": "2026-06-07",
+  "entry_reference_date": "2026-06-05",
+  "picks_count": 1,
+  "picks": [
+    {
+      "code": "373220",
+      "name": "LG에너지솔루션",
+      "signal": "BUY",
+      "score": 65,
+      "nine_filter": {
+        "financial_trend": "🟡",
+        "quant_health": "🟢",
+        "margin_diagnosis": "🟢",
+        "moat": "🟡",
+        "flow": "🟡",
+        "credit_short": "🟢",
+        "nps": "🟢",
+        "technical": "🟡",
+        "report": "🟡"
+      },
+      "moving_averages": {
+        "ma10": 421600,
+        "ma15": 417833
+      },
+      "reason_short": "NPS_NEW · 필터 4/9 통과",
+      "entry_date": "2026-06-05",
+      "entry_close": 414000
+    }
+  ],
+  "created_at": "2026-06-07T23:32:15+09:00"
+}
