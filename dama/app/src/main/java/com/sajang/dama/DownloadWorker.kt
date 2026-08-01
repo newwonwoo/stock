@@ -36,6 +36,11 @@ class DownloadWorker(
         const val KEY_REFERER = "referer"
         const val KEY_PROGRESS = "progress"
         const val KEY_MESSAGE = "message"
+        const val KEY_FAILURE_CODE = "failure_code"
+        const val KEY_FAILURE_TITLE = "failure_title"
+        const val KEY_FAILURE_DETAIL = "failure_detail"
+        const val KEY_FAILURE_ACTION = "failure_action"
+        const val KEY_FAILURE_TECHNICAL = "failure_technical"
         const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36"
         private const val CHANNEL_ID = "dama_downloads"
     }
@@ -53,26 +58,47 @@ class DownloadWorker(
         val referer = inputData.getString(KEY_REFERER)
 
         runCatching {
-            setForeground(foreground(title, 0, true))
-            val result = if (type == "HLS") downloadHls(url, title, referer) else downloadDirect(url, title, referer)
+            reportProgress(title, 1, "다운로드 준비 중", true)
+            val result = if (type == "HLS") {
+                downloadHls(url, title, referer)
+            } else {
+                downloadDirect(url, title, referer)
+            }
             setProgress(workDataOf(KEY_PROGRESS to 100, KEY_MESSAGE to "저장 완료"))
             completeNotification(title, result.uri, result.mime)
-            Result.success()
-        }.getOrElse {
-            Result.failure(workDataOf(KEY_MESSAGE to (it.message ?: "다운로드에 실패했습니다.")))
+            Result.success(workDataOf(KEY_PROGRESS to 100, KEY_MESSAGE to "저장 완료"))
+        }.getOrElse { error ->
+            val report = FailureAnalyzer.analyze(error)
+            Result.failure(
+                workDataOf(
+                    KEY_MESSAGE to report.title,
+                    KEY_FAILURE_CODE to report.code,
+                    KEY_FAILURE_TITLE to report.title,
+                    KEY_FAILURE_DETAIL to report.detail,
+                    KEY_FAILURE_ACTION to report.action,
+                    KEY_FAILURE_TECHNICAL to report.technical,
+                )
+            )
         }
     }
 
     private suspend fun downloadDirect(url: String, title: String, referer: String?): Saved {
+        reportProgress(title, 5, "영상 서버 연결 중", true)
         client.newCall(request(url, referer)).execute().use { response ->
             if (!response.isSuccessful) error("다운로드 실패: HTTP ${response.code}")
             val body = response.body ?: error("빈 응답입니다.")
             val mime = response.header("Content-Type")?.substringBefore(';')
                 ?.takeIf { it.startsWith("video/") } ?: mimeFromUrl(url)
             val extension = extension(mime, url)
+            val expected = body.contentLength().takeIf { it > 0 }
+            reportProgress(
+                title,
+                10,
+                expected?.let { "파일 크기 확인 · ${formatBytes(it)}" } ?: "파일 크기 확인 불가 · 저장 시작",
+                expected == null,
+            )
             val target = createTarget(fileName(title, extension), mime)
             var readTotal = 0L
-            val expected = body.contentLength().takeIf { it > 0 }
             try {
                 applicationContext.contentResolver.openOutputStream(target, "w")!!.use { output ->
                     body.byteStream().use { input ->
@@ -84,14 +110,20 @@ class DownloadWorker(
                             if (count < 0) break
                             output.write(buffer, 0, count)
                             readTotal += count
-                            val progress = expected?.let { ((readTotal * 100.0) / it).roundToInt().coerceIn(0, 99) } ?: 0
-                            if (progress >= last + 2) {
-                                update(title, progress, expected == null)
+                            val progress = expected?.let {
+                                (10 + ((readTotal * 89.0) / it)).roundToInt().coerceIn(10, 99)
+                            } ?: 20
+                            if (progress >= last + 2 || expected == null && readTotal % (2L * 1024 * 1024) < count) {
+                                val message = expected?.let {
+                                    "저장 중 · ${formatBytes(readTotal)} / ${formatBytes(it)}"
+                                } ?: "저장 중 · ${formatBytes(readTotal)}"
+                                reportProgress(title, progress, message, expected == null)
                                 last = progress
                             }
                         }
                     }
                 }
+                reportProgress(title, 99, "파일 등록 중", false)
                 publish(target)
                 return Saved(target, mime)
             } catch (t: Throwable) {
@@ -102,10 +134,12 @@ class DownloadWorker(
     }
 
     private suspend fun downloadHls(url: String, title: String, referer: String?): Saved {
+        reportProgress(title, 4, "HLS 재생목록 요청 중", true)
         val first = fetchText(url, referer)
         val mediaUrl: String
         val playlist: String
         if (first.contains("#EXT-X-STREAM-INF", true)) {
+            reportProgress(title, 8, "HLS 화질 목록 분석 중", true)
             mediaUrl = chooseBest(url, first)
             playlist = fetchText(mediaUrl, referer ?: url)
         } else {
@@ -115,8 +149,11 @@ class DownloadWorker(
         if (playlist.lines().any { it.startsWith("#EXT-X-KEY", true) && !it.contains("METHOD=NONE", true) }) {
             error("암호화된 HLS는 저장할 수 없습니다.")
         }
-        if (playlist.contains("#EXT-X-BYTERANGE", true)) error("바이트 범위 HLS는 아직 지원하지 않습니다.")
+        if (playlist.contains("#EXT-X-BYTERANGE", true)) {
+            error("바이트 범위 HLS는 아직 지원하지 않습니다.")
+        }
 
+        reportProgress(title, 12, "영상 조각 목록 분석 중", true)
         val init = Regex("#EXT-X-MAP:.*URI=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
             .find(playlist)?.groupValues?.getOrNull(1)?.let { resolve(mediaUrl, it) }
         val segments = playlist.lines().map(String::trim)
@@ -129,6 +166,7 @@ class DownloadWorker(
         val ext = if (fragmented) "mp4" else "ts"
         val target = createTarget(fileName(title, ext), mime)
         val all = listOfNotNull(init) + segments
+        reportProgress(title, 15, "영상 조각 ${all.size}개 확인", false)
         try {
             applicationContext.contentResolver.openOutputStream(target, "w")!!.use { output ->
                 all.forEachIndexed { index, segment ->
@@ -145,9 +183,16 @@ class DownloadWorker(
                             }
                         }
                     }
-                    update(title, (((index + 1) * 100.0) / all.size).roundToInt().coerceIn(0, 99), false)
+                    val progress = 15 + (((index + 1) * 84.0) / all.size).roundToInt().coerceIn(0, 84)
+                    reportProgress(
+                        title,
+                        progress,
+                        "영상 조각 ${index + 1} / ${all.size} 저장 중",
+                        false,
+                    )
                 }
             }
+            reportProgress(title, 99, "파일 등록 중", false)
             publish(target)
             return Saved(target, mime)
         } catch (t: Throwable) {
@@ -178,7 +223,10 @@ class DownloadWorker(
     }
 
     private fun request(url: String, referer: String?): Request {
-        val builder = Request.Builder().url(url).header("User-Agent", USER_AGENT).header("Accept", "*/*")
+        val builder = Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "*/*")
         referer?.takeIf(String::isNotBlank)?.let { builder.header("Referer", it) }
         return builder.build()
     }
@@ -190,8 +238,10 @@ class DownloadWorker(
             put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/담아")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
-        return applicationContext.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: error("저장 공간을 열 수 없습니다.")
+        return applicationContext.contentResolver.insert(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            values,
+        ) ?: error("저장 공간을 열 수 없습니다.")
     }
 
     private fun publish(uri: Uri) {
@@ -199,28 +249,38 @@ class DownloadWorker(
             uri,
             ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) },
             null,
-            null
+            null,
         )
     }
 
-    private suspend fun update(title: String, progress: Int, indeterminate: Boolean) {
-        setProgress(workDataOf(KEY_PROGRESS to progress, KEY_MESSAGE to "다운로드 중"))
-        setForeground(foreground(title, progress, indeterminate))
+    private suspend fun reportProgress(
+        title: String,
+        progress: Int,
+        message: String,
+        indeterminate: Boolean,
+    ) {
+        setProgress(workDataOf(KEY_PROGRESS to progress, KEY_MESSAGE to message))
+        setForeground(foreground(title, progress, message, indeterminate))
     }
 
-    private fun foreground(title: String, progress: Int, indeterminate: Boolean): ForegroundInfo {
+    private fun foreground(
+        title: String,
+        progress: Int,
+        message: String,
+        indeterminate: Boolean,
+    ): ForegroundInfo {
         channel()
         val cancel = WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
         val open = PendingIntent.getActivity(
             applicationContext,
             id.hashCode(),
             Intent(applicationContext, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(title)
-            .setContentText(if (indeterminate) "다운로드 중" else "$progress%")
+            .setContentText(message)
             .setProgress(100, progress, indeterminate)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -228,8 +288,14 @@ class DownloadWorker(
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "취소", cancel)
             .build()
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(id.hashCode(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else ForegroundInfo(id.hashCode(), notification)
+            ForegroundInfo(
+                id.hashCode(),
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            ForegroundInfo(id.hashCode(), notification)
+        }
     }
 
     private fun completeNotification(title: String, uri: Uri, mime: String) {
@@ -241,7 +307,7 @@ class DownloadWorker(
                 setDataAndType(uri, mime)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
@@ -256,14 +322,18 @@ class DownloadWorker(
 
     private fun channel() {
         val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "영상 다운로드", NotificationManager.IMPORTANCE_LOW))
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "영상 다운로드", NotificationManager.IMPORTANCE_LOW)
+        )
     }
 
     private fun fileName(title: String, ext: String): String {
         val clean = title.substringBeforeLast('.', title)
             .replace(Regex("[\\/:*?\"<>|\\p{Cntrl}]"), " ")
             .replace(Regex("\\s+"), " ")
-            .trim().take(70).ifBlank { "영상" }
+            .trim()
+            .take(70)
+            .ifBlank { "영상" }
         return "${clean}_${System.currentTimeMillis()}.$ext"
     }
 
@@ -277,6 +347,13 @@ class DownloadWorker(
         mime.contains("webm", true) || url.contains(".webm", true) -> "webm"
         mime.contains("quicktime", true) || url.contains(".mov", true) -> "mov"
         else -> "mp4"
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024L * 1024L -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+        bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
     }
 
     private fun resolve(base: String, value: String): String? = runCatching {
