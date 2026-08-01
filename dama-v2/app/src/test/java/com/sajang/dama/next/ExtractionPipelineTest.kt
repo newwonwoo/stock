@@ -39,4 +39,23 @@ class ExtractionPipelineTest {
         assertEquals(FailureCode.EXTRACTOR_UNSUPPORTED, detail.code)
         assertEquals(PipelineStage.EXTRACTING, detail.stage)
     }
+
+    @Test
+    fun ytDlp403IsClassifiedExplicitly() {
+        val detail = classifyYtDlpFailure(
+            IllegalStateException("ERROR: HTTP Error 403: Forbidden")
+        )
+
+        assertEquals(FailureCode.HTTP_FORBIDDEN, detail.code)
+        assertTrue(detail.retryable)
+    }
+
+    @Test
+    fun ytDlpLoginMessageIsNotUnknown() {
+        val detail = classifyYtDlpFailure(
+            IllegalStateException("Sign in to confirm your age")
+        )
+
+        assertEquals(FailureCode.LOGIN_REQUIRED, detail.code)
+    }
 }
