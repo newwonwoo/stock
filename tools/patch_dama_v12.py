@@ -64,8 +64,8 @@ def patch_gradle() -> None:
     text = replace_once(
         text,
         '    implementation("org.jsoup:jsoup:1.18.3")\n',
-        '    implementation("org.jsoup:jsoup:1.18.3")\n    implementation("org.mozilla.geckoview:geckoview:152.0.20260713164047")\n',
-        "GeckoView dependency",
+        '    implementation("org.jsoup:jsoup:1.18.3")\n    implementation("com.google.guava:guava:33.4.8-android")\n    implementation("org.mozilla.geckoview:geckoview:152.0.20260713164047")\n',
+        "GeckoView and Guava dependencies",
     )
     text = text.replace('versionCode = 11', 'versionCode = 12')
     text = text.replace('versionName = "1.1.0"', 'versionName = "1.2.0"')
