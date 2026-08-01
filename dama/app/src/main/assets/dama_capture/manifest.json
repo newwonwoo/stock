@@ -1,0 +1,27 @@
+{
+  "manifest_version": 2,
+  "name": "Dama Media Capture",
+  "version": "1.0.0",
+  "description": "Detects directly playable media requests for Dama.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "dama-capture@sajang.local"
+    }
+  },
+  "permissions": [
+    "<all_urls>",
+    "webRequest",
+    "geckoViewAddons"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}
