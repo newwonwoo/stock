@@ -12,6 +12,10 @@ fun WorkManager.getWorkInfoByIdFlow(id: UUID): Flow<WorkInfo> = flow {
         val info = withContext(Dispatchers.IO) {
             getWorkInfoById(id).get()
         }
+        if (info == null) {
+            delay(200)
+            continue
+        }
         emit(info)
         if (info.state.isFinished) break
         delay(500)
