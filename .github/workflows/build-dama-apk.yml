@@ -23,6 +23,8 @@ jobs:
         run: python tools/patch_dama_v07.py
       - name: Apply v0.8 process-isolation patch
         run: python tools/patch_dama_v08.py
+      - name: Apply v0.9 isolated-browser patch
+        run: python tools/patch_dama_v09.py
       - name: Fix Worker failure detail compatibility
         run: sed -i 's/BrowserDownloadWorker.KEY_FAILURE_TECHNICAL/BrowserDownloadWorker.KEY_FAILURE_DETAIL/g' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
       - name: Fix Compose scope import
@@ -32,9 +34,9 @@ jobs:
       - name: Collect APK and signing tool
         run: |
           mkdir -p stable-build
-          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v0.8-unsigned.apk
+          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v0.9-unsigned.apk
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" stable-build/apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: dama-v0.8-unsigned
+          name: dama-v0.9-unsigned
           path: stable-build/
