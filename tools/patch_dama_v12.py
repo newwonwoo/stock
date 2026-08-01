@@ -52,6 +52,17 @@ def patch_gradle() -> None:
     text = replace_once(text, 'compileSdk = 35', 'compileSdk = 36', "compileSdk 36")
     text = replace_once(
         text,
+        '    kotlinOptions { jvmTarget = "17" }\n',
+        '''    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
+''',
+        "Kotlin compilerOptions JVM 17",
+    )
+    text = replace_once(
+        text,
         '    implementation("org.jsoup:jsoup:1.18.3")\n',
         '    implementation("org.jsoup:jsoup:1.18.3")\n    implementation("org.mozilla.geckoview:geckoview:152.0.20260713164047")\n',
         "GeckoView dependency",
