@@ -19,24 +19,11 @@ jobs:
           gradle-version: '8.9'
       - name: Install Android SDK 35
         run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - name: Patch nullable WorkInfo flow
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path("dama/app/src/main/java/com/sajang/dama/MainActivity.kt")
-          text = path.read_text()
-          needle = "manager.getWorkInfoByIdFlow(request.id).collect { info ->"
-          replacement = """manager.getWorkInfoByIdFlow(request.id).collect { infoOrNull ->
-                      val info = infoOrNull ?: return@collect"""
-          if needle not in text:
-              raise SystemExit("WorkInfo patch target not found")
-          path.write_text(text.replace(needle, replacement))
-          PY
       - name: Build debug APK
         run: gradle -p dama assembleDebug --stacktrace
       - name: Rename APK
-        run: cp dama/app/build/outputs/apk/debug/app-debug.apk dama-v0.1.apk
+        run: cp dama/app/build/outputs/apk/debug/app-debug.apk dama-v0.2.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: dama-apk
-          path: dama-v0.1.apk
+          name: dama-apk-v0.2
+          path: dama-v0.2.apk
