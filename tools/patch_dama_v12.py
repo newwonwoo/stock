@@ -32,6 +32,18 @@ def patch_root_gradle() -> None:
         'id("com.android.application") version "8.12.2" apply false',
         "AGP 8.12.2",
     )
+    text = replace_once(
+        text,
+        'id("org.jetbrains.kotlin.android") version "2.0.21" apply false',
+        'id("org.jetbrains.kotlin.android") version "2.3.21" apply false',
+        "Kotlin Android 2.3.21",
+    )
+    text = replace_once(
+        text,
+        'id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false',
+        'id("org.jetbrains.kotlin.plugin.compose") version "2.3.21" apply false',
+        "Kotlin Compose 2.3.21",
+    )
     ROOT_GRADLE.write_text(text)
 
 
