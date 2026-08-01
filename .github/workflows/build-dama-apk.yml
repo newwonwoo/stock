@@ -19,6 +19,8 @@ jobs:
           gradle-version: '8.9'
       - name: Install Android SDK 35
         run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Fix Compose scope import
+        run: sed -i '/import androidx.compose.foundation.layout.weight/d' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
       - name: Build debug APK
         run: gradle -p dama assembleDebug --stacktrace
       - name: Rename APK
