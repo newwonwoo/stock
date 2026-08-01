@@ -19,6 +19,104 @@ jobs:
           gradle-version: '8.9'
       - name: Install Android SDK 35
         run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Patch v0.6 WebView capture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("dama/app/src/main/java/com/sajang/dama/BrowserCaptureActivity.kt")
+          lines = path.read_text().splitlines()
+          out = []
+          i = 0
+          inside_open_page = False
+
+          while i < len(lines):
+              line = lines[i]
+              stripped = line.strip()
+
+              if stripped == 'private var lastConsoleError = ""':
+                  out.append(line)
+                  out.append('    private var connectionRetryCount = 0')
+                  i += 1
+                  continue
+
+              if stripped.startswith('private fun openPage()'):
+                  inside_open_page = True
+
+              if inside_open_page and stripped == 'blobDetected = false':
+                  out.append(line)
+                  out.append('        connectionRetryCount = 0')
+                  i += 1
+                  continue
+
+              if inside_open_page and stripped.startswith('private fun inspectRenderedPage()'):
+                  inside_open_page = False
+
+              if 'var m=text.match(' in line:
+                  indent = line[:len(line) - len(line.lstrip())]
+                  out.append(indent + "var normalized=text.split('\\\\/').join('/');")
+                  out.append(indent + 'var urlPattern=new RegExp("https?://[^\\\\s\\\\x22\'<>]+","ig");')
+                  out.append(indent + 'var m=normalized.match(urlPattern)||[];')
+                  i += 1
+                  continue
+
+              if 'm.slice(0,40).forEach(function(u){report(u.replace(' in line:
+                  indent = line[:len(line) - len(line.lstrip())]
+                  out.append(indent + 'm.slice(0,40).forEach(function(u){report(u);});')
+                  i += 1
+                  continue
+
+              if 'override fun onReceivedError(' in line:
+                  indent = line[:len(line) - len(line.lstrip())]
+                  out.extend([
+                      indent + 'override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {',
+                      indent + '    if (request?.isForMainFrame == true) {',
+                      indent + '        val description = error?.description?.toString().orEmpty()',
+                      indent + '        val failedUrl = request.url.toString()',
+                      indent + '        val isReset = description.contains("CONNECTION_RESET", true) ||',
+                      indent + '            description.contains("connection reset", true)',
+                      indent + '        if (isReset && connectionRetryCount < 2) {',
+                      indent + '            connectionRetryCount += 1',
+                      indent + '            val attempt = connectionRetryCount',
+                      indent + '            status(',
+                      indent + '                "연결 재시도",',
+                      indent + '                10 + attempt * 4,',
+                      indent + '                "CONNECTION_RESET_RETRY_$attempt\\n연결이 초기화되어 자동으로 다시 접속합니다. ($attempt/2)",',
+                      indent + '            )',
+                      indent + '            handler.postDelayed({',
+                      indent + '                webView.stopLoading()',
+                      indent + '                webView.clearCache(false)',
+                      indent + '                webView.settings.cacheMode = WebSettings.LOAD_NO_CACHE',
+                      indent + '                webView.loadUrl(failedUrl)',
+                      indent + '            }, 900L * attempt)',
+                      indent + '            return',
+                      indent + '        }',
+                      indent + '        val code = if (isReset) "CONNECTION_RESET" else "PAGE_LOAD_FAILED"',
+                      indent + '        status(',
+                      indent + '            "페이지 연결 실패",',
+                      indent + '            100,',
+                      indent + '            "$code\\n${description.ifBlank { "페이지를 열 수 없습니다." }}\\nHTML 직접 분석을 시도합니다.",',
+                      indent + '        )',
+                      indent + '        runSourceProbe(true)',
+                      indent + '    }',
+                      indent + '}',
+                      '',
+                  ])
+                  i += 1
+                  while i < len(lines) and 'override fun onRenderProcessGone(' not in lines[i]:
+                      i += 1
+                  continue
+
+              out.append(line)
+              i += 1
+
+          patched = "\n".join(out) + "\n"
+          if 'var urlPattern=new RegExp' not in patched:
+              raise SystemExit('safe URL pattern patch failed')
+          if 'connectionRetryCount < 2' not in patched:
+              raise SystemExit('connection retry patch failed')
+          path.write_text(patched)
+          PY
       - name: Fix Compose scope import
         run: sed -i '/import androidx.compose.foundation.layout.weight/d' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
       - name: Build unsigned release APK
@@ -26,9 +124,9 @@ jobs:
       - name: Collect signing tool and APK
         run: |
           mkdir -p stable-build
-          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v0.5-unsigned.apk
+          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v0.6-unsigned.apk
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" stable-build/apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: dama-v0.5-unsigned
+          name: dama-v0.6-unsigned
           path: stable-build/
