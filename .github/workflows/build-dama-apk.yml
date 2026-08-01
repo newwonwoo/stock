@@ -16,9 +16,9 @@ jobs:
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
-      - name: Install Android SDK 35
-        run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          gradle-version: '8.13'
+      - name: Install Android SDK 36
+        run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0"
       - name: Apply v0.7 safe-mode patch
         run: python tools/patch_dama_v07.py
       - name: Apply v0.8 process-isolation patch
