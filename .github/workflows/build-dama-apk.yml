@@ -29,20 +29,20 @@ jobs:
         run: python tools/patch_dama_v10.py
       - name: Apply v1.1 HTTP zero retry fix
         run: python tools/patch_dama_v11.py
-      - name: Apply v1.2 GeckoView engine switch
+      - name: Apply v1.2.1 ARM64 GeckoView build
         run: python tools/patch_dama_v12.py
       - name: Fix Worker failure detail compatibility
         run: sed -i 's/BrowserDownloadWorker.KEY_FAILURE_TECHNICAL/BrowserDownloadWorker.KEY_FAILURE_DETAIL/g' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
       - name: Fix Compose scope import
         run: sed -i '/import androidx.compose.foundation.layout.weight/d' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
-      - name: Build unsigned release APK
+      - name: Build unsigned ARM64 release APK
         run: gradle -p dama assembleRelease --stacktrace
       - name: Collect APK and signing tool
         run: |
           mkdir -p stable-build
-          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v1.2-unsigned.apk
+          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v1.2.1-arm64-unsigned.apk
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" stable-build/apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: dama-v1.2-unsigned
+          name: dama-v1.2.1-arm64-unsigned
           path: stable-build/
