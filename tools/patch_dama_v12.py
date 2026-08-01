@@ -1,6 +1,7 @@
 from pathlib import Path
 
 SETTINGS = Path("dama/settings.gradle.kts")
+ROOT_GRADLE = Path("dama/build.gradle.kts")
 GRADLE = Path("dama/app/build.gradle.kts")
 MANIFEST = Path("dama/app/src/main/AndroidManifest.xml")
 MAIN = Path("dama/app/src/main/java/com/sajang/dama/MainActivity.kt")
@@ -23,8 +24,20 @@ def patch_settings() -> None:
     SETTINGS.write_text(text)
 
 
+def patch_root_gradle() -> None:
+    text = ROOT_GRADLE.read_text()
+    text = replace_once(
+        text,
+        'id("com.android.application") version "8.7.3" apply false',
+        'id("com.android.application") version "8.12.2" apply false',
+        "AGP 8.12.2",
+    )
+    ROOT_GRADLE.write_text(text)
+
+
 def patch_gradle() -> None:
     text = GRADLE.read_text()
+    text = replace_once(text, 'compileSdk = 35', 'compileSdk = 36', "compileSdk 36")
     text = replace_once(
         text,
         '    implementation("org.jsoup:jsoup:1.18.3")\n',
@@ -85,6 +98,7 @@ def patch_main() -> None:
 
 def main() -> None:
     patch_settings()
+    patch_root_gradle()
     patch_gradle()
     patch_manifest()
     patch_main()
