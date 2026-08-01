@@ -31,13 +31,25 @@ class YtDlpExtractor(
             ensureInitialized()
 
             reporter.report(PipelineStage.EXTRACTING)
-            val request = YoutubeDLRequest(input).apply {
-                addOption("--no-playlist")
-                addOption("--socket-timeout", "10")
-                addOption("--retries", "1")
-                addOption("--no-warnings")
+            val extractionUrl = stripFragmentForExtraction(input)
+            val firstAttempt = runCatching {
+                YoutubeDL.getInstance().getInfo(
+                    buildRequest(extractionUrl, forceIpv4 = false)
+                )
             }
-            val info = YoutubeDL.getInstance().getInfo(request)
+
+            val info = firstAttempt.getOrElse { firstError ->
+                if (!isConnectionReset(firstError)) throw firstError
+
+                val secondAttempt = runCatching {
+                    YoutubeDL.getInstance().getInfo(
+                        buildRequest(extractionUrl, forceIpv4 = true)
+                    )
+                }
+                secondAttempt.getOrElse { secondError ->
+                    throw YtDlpRetryException(firstError, secondError)
+                }
+            }
 
             reporter.report(PipelineStage.PARSING_FORMATS)
             val descriptors = mapVideoInfo(info)
@@ -57,6 +69,23 @@ class YtDlpExtractor(
         }
     }
 
+    private fun buildRequest(
+        input: String,
+        forceIpv4: Boolean
+    ): YoutubeDLRequest = YoutubeDLRequest(input).apply {
+        addOption("--no-playlist")
+        addOption("--socket-timeout", "12")
+        addOption("--retries", "0")
+        addOption("--extractor-retries", "0")
+        addOption("--no-warnings")
+        addOption("--user-agent", ANDROID_CHROME_USER_AGENT)
+        addOption(
+            "--add-header",
+            "Accept-Language:ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+        )
+        if (forceIpv4) addOption("-4")
+    }
+
     private suspend fun ensureInitialized() {
         if (initialized) return
         initMutex.withLock {
@@ -65,6 +94,44 @@ class YtDlpExtractor(
             initialized = true
         }
     }
+
+    private companion object {
+        const val ANDROID_CHROME_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
+    }
+}
+
+private class YtDlpRetryException(
+    firstError: Throwable,
+    secondError: Throwable
+) : RuntimeException(
+    buildString {
+        append("default attempt: ")
+        append(firstError.message.orEmpty().take(900))
+        append(" | IPv4 retry: ")
+        append(secondError.message.orEmpty().take(900))
+    },
+    secondError
+)
+
+internal fun stripFragmentForExtraction(input: String): String =
+    input.substringBefore('#').ifBlank { input }
+
+internal fun isConnectionReset(error: Throwable): Boolean {
+    var current: Throwable? = error
+    repeat(8) {
+        val text = current?.message.orEmpty().lowercase(Locale.US)
+        if (
+            "connection reset" in text ||
+            "errno 104" in text ||
+            "reset by peer" in text
+        ) {
+            return true
+        }
+        current = current?.cause
+    }
+    return false
 }
 
 internal fun mapVideoInfo(info: VideoInfo): List<MediaDescriptor> {
@@ -149,6 +216,7 @@ internal fun classifyYtDlpFailure(error: Throwable): FailureDetail {
     val normalized = technical.lowercase(Locale.US)
 
     val code = when {
+        isConnectionReset(error) -> FailureCode.NETWORK_RESET
         "unsupported url" in normalized -> FailureCode.EXTRACTOR_UNSUPPORTED
         "sign in" in normalized || "login" in normalized -> FailureCode.LOGIN_REQUIRED
         "cookie" in normalized -> FailureCode.COOKIE_REQUIRED
@@ -159,6 +227,7 @@ internal fun classifyYtDlpFailure(error: Throwable): FailureDetail {
 
     val retryable = code in setOf(
         FailureCode.EXTRACTOR_FAILED,
+        FailureCode.NETWORK_RESET,
         FailureCode.HTTP_FORBIDDEN,
         FailureCode.RATE_LIMITED
     )
@@ -168,6 +237,8 @@ internal fun classifyYtDlpFailure(error: Throwable): FailureDetail {
         code = code,
         message = when (code) {
             FailureCode.EXTRACTOR_UNSUPPORTED -> "yt-dlp가 이 주소를 지원하지 않습니다."
+            FailureCode.NETWORK_RESET ->
+                "일반 요청과 IPv4 재시도 모두 상대 서버에서 연결이 종료됐습니다."
             FailureCode.LOGIN_REQUIRED -> "로그인이 필요한 페이지입니다."
             FailureCode.COOKIE_REQUIRED -> "브라우저 쿠키가 필요한 페이지입니다."
             FailureCode.HTTP_FORBIDDEN -> "사이트가 추출 요청을 거부했습니다."
