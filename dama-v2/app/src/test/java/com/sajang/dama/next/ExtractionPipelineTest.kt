@@ -58,4 +58,25 @@ class ExtractionPipelineTest {
 
         assertEquals(FailureCode.LOGIN_REQUIRED, detail.code)
     }
+
+    @Test
+    fun ytDlpConnectionResetHasDedicatedFailureCode() {
+        val detail = classifyYtDlpFailure(
+            IllegalStateException(
+                "Unable to download webpage: [Errno 104] Connection reset by peer"
+            )
+        )
+
+        assertEquals(FailureCode.NETWORK_RESET, detail.code)
+        assertTrue(detail.retryable)
+    }
+
+    @Test
+    fun browserOnlyFragmentIsRemovedBeforeYtDlpTransport() {
+        val cleaned = stripFragmentForExtraction(
+            "https://example.com/watch/123#mobile-watch-next"
+        )
+
+        assertEquals("https://example.com/watch/123", cleaned)
+    }
 }
