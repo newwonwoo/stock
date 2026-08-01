@@ -30,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -57,9 +58,13 @@ private sealed interface ResolveUiState {
 
 @Composable
 private fun DamaV2App(initialInput: String) {
-    val pipeline = remember {
+    val context = LocalContext.current.applicationContext
+    val pipeline = remember(context) {
         ExtractionPipeline(
-            extractors = listOf(DirectUrlExtractor())
+            extractors = listOf(
+                DirectUrlExtractor(),
+                YtDlpExtractor(context)
+            )
         )
     }
     val scope = rememberCoroutineScope()
@@ -81,7 +86,7 @@ private fun DamaV2App(initialInput: String) {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "새 파이프라인의 첫 수직 기능입니다. 직접 MP4·HLS·DASH 주소만 판별합니다.",
+                    text = "직접 미디어 주소는 즉시 판별하고, 일반 페이지는 yt-dlp로 형식을 추출합니다.",
                     style = MaterialTheme.typography.bodyMedium
                 )
 
@@ -157,18 +162,26 @@ private fun DamaV2App(initialInput: String) {
                     }
 
                     is ResolveUiState.Ready -> {
-                        val media = state.result.media.first()
                         StatusCard(
                             title = "추출 성공 · ${state.result.extractorId}",
                             body = buildString {
-                                appendLine("유형: ${media.kind}")
-                                appendLine("제목: ${media.title}")
-                                appendLine("MIME: ${media.mimeType ?: "확인 필요"}")
-                                append("주소: ${media.sourceUrl}")
+                                appendLine("후보: ${state.result.media.size}개")
+                                state.result.media.take(8).forEachIndexed { index, media ->
+                                    append(index + 1)
+                                    append(". ")
+                                    append(media.qualityLabel ?: media.formatId ?: media.kind.name)
+                                    append(" · ")
+                                    append(media.trackRole)
+                                    append(" · ")
+                                    appendLine(media.kind)
+                                }
+                                if (state.result.media.size > 8) {
+                                    append("외 ${state.result.media.size - 8}개")
+                                }
                             }
                         )
                         Text(
-                            text = "다운로드 엔진은 이 계약을 유지한 채 다음 단계에서 연결합니다.",
+                            text = "이번 단계는 추출 형식 검증용입니다. 다운로드 엔진은 다음 수직 기능에서 연결합니다.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -221,7 +234,9 @@ private fun StatusCard(
 private fun stageLabel(stage: PipelineStage): String = when (stage) {
     PipelineStage.IDLE -> "대기"
     PipelineStage.VALIDATING_URL -> "주소 검증 중"
-    PipelineStage.EXTRACTING -> "추출기 실행 중"
+    PipelineStage.INITIALIZING_ENGINE -> "yt-dlp 엔진 준비 중"
+    PipelineStage.EXTRACTING -> "영상 정보 추출 중"
+    PipelineStage.PARSING_FORMATS -> "화질·트랙 분석 중"
     PipelineStage.FORMATS_FOUND -> "미디어 형식 확인"
     PipelineStage.READY_TO_DOWNLOAD -> "다운로드 준비"
     PipelineStage.FAILED -> "실패"
