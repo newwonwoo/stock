@@ -23,6 +23,8 @@ jobs:
         run: python tools/patch_dama_v07.py
       - name: Apply v0.8 process-isolation patch
         run: python tools/patch_dama_v08.py
+      - name: Fix Worker failure detail compatibility
+        run: sed -i 's/BrowserDownloadWorker.KEY_FAILURE_TECHNICAL/BrowserDownloadWorker.KEY_FAILURE_DETAIL/g' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
       - name: Fix Compose scope import
         run: sed -i '/import androidx.compose.foundation.layout.weight/d' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
       - name: Build unsigned release APK
