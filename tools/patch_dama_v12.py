@@ -52,6 +52,12 @@ def patch_gradle() -> None:
     text = replace_once(text, 'compileSdk = 35', 'compileSdk = 36', "compileSdk 36")
     text = replace_once(
         text,
+        '        targetSdk = 35\n',
+        '        targetSdk = 35\n        ndk { abiFilters += listOf("arm64-v8a") }\n',
+        "ARM64 ABI filter",
+    )
+    text = replace_once(
+        text,
         '    kotlinOptions { jvmTarget = "17" }\n',
         '''    kotlin {
         compilerOptions {
@@ -67,10 +73,10 @@ def patch_gradle() -> None:
         '    implementation("org.jsoup:jsoup:1.18.3")\n    implementation("com.google.guava:guava:33.4.8-android")\n    implementation("org.mozilla.geckoview:geckoview:152.0.20260713164047")\n',
         "GeckoView and Guava dependencies",
     )
-    text = text.replace('versionCode = 11', 'versionCode = 12')
-    text = text.replace('versionName = "1.1.0"', 'versionName = "1.2.0"')
-    if 'versionCode = 12' not in text or 'versionName = "1.2.0"' not in text:
-        raise RuntimeError("v1.2 version patch failed")
+    text = text.replace('versionCode = 11', 'versionCode = 13')
+    text = text.replace('versionName = "1.1.0"', 'versionName = "1.2.1"')
+    if 'versionCode = 13' not in text or 'versionName = "1.2.1"' not in text:
+        raise RuntimeError("v1.2.1 version patch failed")
     GRADLE.write_text(text)
 
 
