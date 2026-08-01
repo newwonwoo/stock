@@ -25,7 +25,7 @@ class ExtractionPipeline(
         val unsupportedReasons = mutableListOf<String>()
 
         for (extractor in extractors) {
-            when (val result = extractor.extract(normalized)) {
+            when (val result = extractor.extract(normalized, reporter)) {
                 is ExtractionResult.Success -> {
                     if (result.media.isEmpty()) {
                         unsupportedReasons += "${extractor.id}: empty result"
@@ -62,7 +62,10 @@ class ExtractionPipeline(
 class DirectUrlExtractor : MediaExtractor {
     override val id: String = "direct-url"
 
-    override suspend fun extract(input: String): ExtractionResult {
+    override suspend fun extract(
+        input: String,
+        reporter: StageReporter
+    ): ExtractionResult {
         val uri = runCatching { URI(input) }.getOrNull()
             ?: return ExtractionResult.Unsupported(id, "URI parse failed")
         val path = uri.path.orEmpty().lowercase(Locale.US)
@@ -111,7 +114,7 @@ internal fun normalizeHttpUrl(input: String): String? {
     val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
     if (uri.scheme?.lowercase(Locale.US) !in setOf("http", "https")) return null
     if (uri.host.isNullOrBlank()) return null
-    return candidate.trimEnd('.', ',', ')', ']', '}', '>', '\"', '\'')
+    return candidate.trimEnd('.', ',', ')', ']', '}', '>', '"', '\'')
 }
 
 private val HTTP_URL = Regex("https?://\\S+", RegexOption.IGNORE_CASE)
