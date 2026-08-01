@@ -3,7 +3,9 @@ package com.sajang.dama.next
 enum class PipelineStage {
     IDLE,
     VALIDATING_URL,
+    INITIALIZING_ENGINE,
     EXTRACTING,
+    PARSING_FORMATS,
     FORMATS_FOUND,
     READY_TO_DOWNLOAD,
     FAILED
@@ -43,6 +45,13 @@ data class MediaDescriptor(
     val sourceUrl: String,
     val kind: MediaKind,
     val title: String = "영상",
+    val formatId: String? = null,
+    val qualityLabel: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val videoCodec: String? = null,
+    val audioCodec: String? = null,
+    val fileSizeBytes: Long? = null,
     val mimeType: String? = null,
     val headers: Map<String, String> = emptyMap(),
     val cookies: String? = null,
@@ -73,7 +82,10 @@ fun interface StageReporter {
 interface MediaExtractor {
     val id: String
 
-    suspend fun extract(input: String): ExtractionResult
+    suspend fun extract(
+        input: String,
+        reporter: StageReporter = StageReporter { }
+    ): ExtractionResult
 }
 
 interface DownloadEngine {
