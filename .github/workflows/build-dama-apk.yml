@@ -21,11 +21,14 @@ jobs:
         run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Fix Compose scope import
         run: sed -i '/import androidx.compose.foundation.layout.weight/d' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
-      - name: Build debug APK
-        run: gradle -p dama assembleDebug --stacktrace
-      - name: Rename APK
-        run: cp dama/app/build/outputs/apk/debug/app-debug.apk dama-v0.4.apk
+      - name: Build unsigned release APK
+        run: gradle -p dama assembleRelease --stacktrace
+      - name: Collect signing tool and APK
+        run: |
+          mkdir -p stable-build
+          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v0.5-unsigned.apk
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" stable-build/apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: dama-apk-v0.4
-          path: dama-v0.4.apk
+          name: dama-v0.5-unsigned
+          path: stable-build/
