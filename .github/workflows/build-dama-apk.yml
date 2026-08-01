@@ -21,6 +21,8 @@ jobs:
         run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Apply v0.7 safe-mode patch
         run: python tools/patch_dama_v07.py
+      - name: Apply v0.8 process-isolation patch
+        run: python tools/patch_dama_v08.py
       - name: Fix Compose scope import
         run: sed -i '/import androidx.compose.foundation.layout.weight/d' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
       - name: Build unsigned release APK
@@ -28,9 +30,9 @@ jobs:
       - name: Collect APK and signing tool
         run: |
           mkdir -p stable-build
-          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v0.7-unsigned.apk
+          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v0.8-unsigned.apk
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" stable-build/apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
-          name: dama-v0.7-unsigned
+          name: dama-v0.8-unsigned
           path: stable-build/
