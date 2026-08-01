@@ -41,12 +41,21 @@ enum class MediaKind {
     DASH
 }
 
+enum class TrackRole {
+    MUXED,
+    VIDEO_ONLY,
+    AUDIO_ONLY,
+    UNKNOWN
+}
+
 data class MediaDescriptor(
     val sourceUrl: String,
     val kind: MediaKind,
     val title: String = "영상",
     val formatId: String? = null,
     val qualityLabel: String? = null,
+    val trackRole: TrackRole = TrackRole.UNKNOWN,
+    val manifestUrl: String? = null,
     val width: Int? = null,
     val height: Int? = null,
     val videoCodec: String? = null,
