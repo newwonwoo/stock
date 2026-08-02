@@ -244,15 +244,24 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Install Android SDK 36
-        run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0"
-
-      - name: Enable KVM group permissions
+      - name: Install emulator SDK and system image
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm || true
+          yes | sdkmanager \
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "emulator" \
+            "system-images;android-35;default;x86_64"
+
+      - name: Create deterministic Android virtual device
+        run: |
+          echo "no" | avdmanager create avd \
+            --force \
+            --name dama-ci \
+            --package "system-images;android-35;default;x86_64" \
+            --device "pixel_6"
+          echo "hw.cpu.ncore=2" >> "$HOME/.android/avd/dama-ci.avd/config.ini"
+          echo "hw.ramSize=2048" >> "$HOME/.android/avd/dama-ci.avd/config.ini"
+          echo "disk.dataPartition.size=6G" >> "$HOME/.android/avd/dama-ci.avd/config.ini"
 
       - name: Start deterministic fixture server
         run: |
@@ -269,18 +278,8 @@ jobs:
           cat /tmp/dama-fixture.log
           exit 1
 
-      - name: Emulator UI, browser capture, yt-dlp and MediaStore tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          profile: pixel_6
-          emulator-boot-timeout: 900
-          disable-animations: false
-          emulator-options: >-
-            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-            -camera-back none -no-metrics
-          script: bash dama-v2/test-harness/run_android_emulator_tests.sh
+      - name: Launch emulator and run Android tests
+        run: bash dama-v2/test-harness/run_emulator_ci.sh
 
       - name: Upload emulator reports
         if: always()
@@ -292,3 +291,4 @@ jobs:
             dama-v2/app/build/reports/androidTests
             dama-v2/app/build/outputs/androidTest-results
             /tmp/dama-fixture.log
+            /tmp/dama-emulator.log
