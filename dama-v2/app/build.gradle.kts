@@ -12,8 +12,8 @@ android {
         applicationId = "com.sajang.dama.next"
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "2.0.0-dev5-mvp"
+        versionCode = 6
+        versionName = "2.0.0-dev6-hls"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -55,6 +55,7 @@ android {
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.05.01")
+    val youtubedlAndroid = "0.18.1"
 
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -66,7 +67,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:library:$youtubedlAndroid")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$youtubedlAndroid")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
