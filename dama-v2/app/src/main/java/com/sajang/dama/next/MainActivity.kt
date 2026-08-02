@@ -59,6 +59,13 @@ private sealed interface ResolveUiState {
     data class Failed(val detail: FailureDetail) : ResolveUiState
 }
 
+private sealed interface DownloadUiState {
+    data object Idle : DownloadUiState
+    data object Working : DownloadUiState
+    data class Saved(val uri: String) : DownloadUiState
+    data class Failed(val message: String) : DownloadUiState
+}
+
 @Composable
 private fun DamaV2App(initialInput: String) {
     val context = LocalContext.current
@@ -71,10 +78,15 @@ private fun DamaV2App(initialInput: String) {
             )
         )
     }
+    val downloader = remember(appContext) {
+        DirectDownloadEngine(appContext)
+    }
     val scope = rememberCoroutineScope()
     var input by rememberSaveable { mutableStateOf(initialInput) }
     var uiState by remember { mutableStateOf<ResolveUiState>(ResolveUiState.Idle) }
+    var downloadState by remember { mutableStateOf<DownloadUiState>(DownloadUiState.Idle) }
     var diagnosticFile by remember { mutableStateOf<File?>(null) }
+    var activeDiagnostics by remember { mutableStateOf<DiagnosticSession?>(null) }
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -86,12 +98,12 @@ private fun DamaV2App(initialInput: String) {
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = "담아 v2 개발판",
+                    text = "담아 v2 MVP",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "직접 미디어 주소는 즉시 판별하고, 일반 페이지는 yt-dlp로 형식을 추출합니다.",
+                    text = "주소를 분석한 뒤 직접 다운로드 가능한 형식을 Movies/담아에 저장합니다.",
                     style = MaterialTheme.typography.bodyMedium
                 )
 
@@ -103,22 +115,26 @@ private fun DamaV2App(initialInput: String) {
                         .testTag("urlInput"),
                     label = { Text("영상 주소") },
                     minLines = 3,
-                    enabled = uiState !is ResolveUiState.Working
+                    enabled = uiState !is ResolveUiState.Working && downloadState !is DownloadUiState.Working
                 )
 
                 Button(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("analyzeButton"),
-                    enabled = input.isNotBlank() && uiState !is ResolveUiState.Working,
+                    enabled = input.isNotBlank() &&
+                        uiState !is ResolveUiState.Working &&
+                        downloadState !is DownloadUiState.Working,
                     onClick = {
                         val diagnostics = DiagnosticSession()
+                        activeDiagnostics = diagnostics
                         diagnostics.record(
                             category = "INPUT",
                             message = "analysis requested",
                             detail = input
                         )
                         diagnosticFile = null
+                        downloadState = DownloadUiState.Idle
 
                         scope.launch {
                             uiState = ResolveUiState.Working(PipelineStage.VALIDATING_URL)
@@ -213,6 +229,7 @@ private fun DamaV2App(initialInput: String) {
                     }
 
                     is ResolveUiState.Ready -> {
+                        val candidate = selectMvpDownloadCandidate(state.result.media)
                         StatusCard(
                             title = "추출 성공 · ${state.result.extractorId}",
                             body = buildString {
@@ -226,15 +243,60 @@ private fun DamaV2App(initialInput: String) {
                                     append(" · ")
                                     appendLine(media.kind)
                                 }
-                                if (state.result.media.size > 8) {
-                                    append("외 ${state.result.media.size - 8}개")
+                                if (candidate != null) {
+                                    append("MVP 선택: ")
+                                    append(candidate.qualityLabel ?: candidate.formatId ?: "직접 형식")
+                                } else {
+                                    append("직접 다운로드 가능한 형식이 없습니다.")
                                 }
                             }
                         )
-                        Text(
-                            text = "이번 단계는 추출 형식 검증용입니다. 다운로드 엔진은 다음 수직 기능에서 연결합니다.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
+
+                        if (candidate != null) {
+                            Button(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("downloadButton"),
+                                enabled = downloadState !is DownloadUiState.Working,
+                                onClick = {
+                                    scope.launch {
+                                        downloadState = DownloadUiState.Working
+                                        activeDiagnostics?.record(
+                                            category = "DOWNLOAD",
+                                            message = "direct download started",
+                                            detail = candidate.sourceUrl
+                                        )
+
+                                        downloader.download(candidate).fold(
+                                            onSuccess = { uri ->
+                                                activeDiagnostics?.record(
+                                                    category = "DOWNLOAD",
+                                                    message = "saved",
+                                                    detail = uri
+                                                )
+                                                downloadState = DownloadUiState.Saved(uri)
+                                            },
+                                            onFailure = { error ->
+                                                activeDiagnostics?.record(
+                                                    category = "DOWNLOAD_FAILURE",
+                                                    message = error::class.java.simpleName,
+                                                    detail = error.message
+                                                )
+                                                downloadState = DownloadUiState.Failed(
+                                                    error.message ?: "다운로드에 실패했습니다."
+                                                )
+                                            }
+                                        )
+
+                                        diagnosticFile = activeDiagnostics?.let { diagnostics ->
+                                            runCatching { diagnostics.writeToCache(context) }.getOrNull()
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Movies/담아에 다운로드")
+                            }
+                        }
                     }
 
                     is ResolveUiState.Failed -> {
@@ -259,6 +321,37 @@ private fun DamaV2App(initialInput: String) {
                             isError = true
                         )
                     }
+                }
+
+                when (val state = downloadState) {
+                    DownloadUiState.Idle -> Unit
+                    DownloadUiState.Working -> Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("downloadWorkingCard")
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator()
+                            Text("다운로드·저장 중", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    is DownloadUiState.Saved -> StatusCard(
+                        title = "저장 완료",
+                        body = "Movies/담아에 저장했습니다.\n${state.uri}"
+                    )
+
+                    is DownloadUiState.Failed -> StatusCard(
+                        title = "다운로드 실패",
+                        body = state.message,
+                        isError = true
+                    )
                 }
 
                 diagnosticFile?.let { file ->
