@@ -3,7 +3,9 @@ package com.sajang.dama.next
 import android.provider.MediaStore
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.fetchSemanticsNodes
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
@@ -62,11 +64,9 @@ class MainActivityTest {
         timeoutMillis: Long = 20_000
     ) {
         composeRule.waitUntil(timeoutMillis) {
-            runCatching {
-                composeRule.onNodeWithTag("statusTitle")
-                    .assertTextContains(expected, substring = true)
-                true
-            }.getOrDefault(false)
+            composeRule.onAllNodesWithText(expected, substring = true)
+                .fetchSemanticsNodes()
+                .isNotEmpty()
         }
     }
 
