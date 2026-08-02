@@ -111,8 +111,8 @@ internal fun selectMvpDownloadCandidate(media: List<MediaDescriptor>): MediaDesc
         .filter { !it.drmProtected && it.trackRole != TrackRole.AUDIO_ONLY }
         .sortedWith(
             compareByDescending<MediaDescriptor> { it.trackRole == TrackRole.MUXED }
-                .thenByDescending { it.height ?: 0 }
                 .thenByDescending { it.kind == MediaKind.DIRECT }
+                .thenByDescending { it.height ?: 0 }
                 .thenByDescending { it.fileSizeBytes ?: 0L }
         )
         .firstOrNull()
