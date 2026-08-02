@@ -71,7 +71,7 @@ class ExtractionPipelineTest {
     }
 
     @Test
-    fun mvpCandidateRejectsDrmAndNonDirectFormats() {
+    fun mvpCandidateUsesHlsWhenDirectVideoIsUnavailable() {
         val selected = selectMvpDownloadCandidate(
             listOf(
                 MediaDescriptor(
@@ -81,12 +81,15 @@ class ExtractionPipelineTest {
                 ),
                 MediaDescriptor(
                     sourceUrl = "https://cdn.example.com/master.m3u8",
-                    kind = MediaKind.HLS
+                    kind = MediaKind.HLS,
+                    trackRole = TrackRole.MUXED,
+                    pageUrl = "https://example.com/watch/123"
                 )
             )
         )
 
-        assertEquals(null, selected)
+        assertEquals("https://cdn.example.com/master.m3u8", selected?.sourceUrl)
+        assertEquals("https://example.com/watch/123", selected?.pageUrl)
     }
 
     @Test
