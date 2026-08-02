@@ -236,6 +236,7 @@ jobs:
               "com.sajang.dama.next.MainActivityTest#invalidInputProducesFailureAndDiagnosticFile"
               "com.sajang.dama.next.MainActivityTest#directMp4IsDownloadedAndSavedToMediaStore"
               "com.sajang.dama.next.MainActivityTest#controlledFixturePageIsExtractedByAndroidYtDlp"
+              "com.sajang.dama.next.BrowserCaptureActivityTest#pikpakPublicJsonExtractsDownloadAndMediaLinksOnAndroid"
               "com.sajang.dama.next.BrowserCaptureActivityTest#capturesDirectLinkFromLocalJsonFixture"
               "com.sajang.dama.next.BrowserCaptureActivityTest#capturesHlsLinkFromLocalWindowFixture"
             )
