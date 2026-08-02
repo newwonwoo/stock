@@ -246,13 +246,13 @@ jobs:
             )
             overall=0
             for test_selector in "${tests[@]}"; do
-              adb shell pm clear com.sajang.dama.next >/dev/null || true
+              adb shell pm clear com.sajang.dama >/dev/null || true
               adb logcat -c || true
               test_name=$(echo "$test_selector" | tr '#.' '__')
               log_file="dama-v2/app/build/reports/androidTests/isolated/${test_name}.txt"
               timeout 180s adb shell am instrument -w -r \
                 -e class "$test_selector" \
-                com.sajang.dama.next.test/androidx.test.runner.AndroidJUnitRunner \
+                com.sajang.dama.test/androidx.test.runner.AndroidJUnitRunner \
                 | tee "$log_file"
               command_status=${PIPESTATUS[0]}
               adb logcat -d > "dama-v2/app/build/reports/androidTests/isolated/${test_name}-logcat.txt" || true
