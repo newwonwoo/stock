@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Focused NjavTV HLS probe using the browser player's own session.
 
-The page creates its HLS instance during initialization. The probe does not click
-or bypass encryption. It captures the manifest response and its request headers,
-then validates child playlists and one media segment with the same browser
-cookies and headers.
+The probe never clicks through protection or bypasses encryption. It observes the
+public player, reuses successful manifest/segment responses, and verifies that a
+captured media segment contains a playable video stream. A known 8-byte transport
+prefix is tested only as a container normalization step.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import asyncio
 import json
 import os
 import pathlib
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -44,10 +46,23 @@ HLS_CHECK = """
   return null;
 }
 """
+PLAY_VIDEOS = """
+() => {
+  let count = 0;
+  for (const video of document.querySelectorAll('video')) {
+    count += 1;
+    video.muted = true;
+    video.playsInline = true;
+    const result = video.play();
+    if (result && result.catch) result.catch(() => {});
+  }
+  return count;
+}
+"""
 
 
 @dataclass
-class CapturedManifest:
+class CapturedResource:
     url: str
     status: int
     body: bytes
@@ -76,6 +91,21 @@ def is_manifest(url: str, content_type: str) -> bool:
     return ".m3u8" in signal or "mpegurl" in signal
 
 
+def is_segment(url: str, content_type: str) -> bool:
+    parsed = urlsplit(url)
+    path = parsed.path.lower()
+    media_type = content_type.lower()
+    return (
+        parsed.netloc.endswith("surrit.com")
+        and (
+            path.endswith((".ts", ".m4s", ".mp4"))
+            or "video/mp2t" in media_type
+            or "video/mp4" in media_type
+            or "application/octet-stream" in media_type
+        )
+    )
+
+
 def replay_headers(headers: dict[str, str]) -> dict[str, str]:
     allowed = {
         "accept",
@@ -90,6 +120,14 @@ def replay_headers(headers: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in headers.items() if key.lower() in allowed}
 
 
+def same_resource(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    left_parts = urlsplit(left)
+    right_parts = urlsplit(right)
+    return left_parts.netloc == right_parts.netloc and left_parts.path == right_parts.path
+
+
 async def browser_request(
     context,
     url: str,
@@ -99,7 +137,7 @@ async def browser_request(
 ) -> dict[str, Any]:
     request_headers = dict(headers)
     if byte_range:
-        request_headers["Range"] = "bytes=0-1048575"
+        request_headers["Range"] = "bytes=0-4194303"
     response = await context.request.get(
         url,
         headers=request_headers,
@@ -109,10 +147,53 @@ async def browser_request(
     body = await response.body()
     return {
         "status": response.status,
+        "body": body,
         "bytes": len(body),
         "content_type": response.headers.get("content-type", ""),
         "text": "" if byte_range else body[:1_500_000].decode("utf-8", errors="ignore"),
     }
+
+
+def probe_video_stream(body: bytes) -> tuple[bool, str, int, str | None]:
+    attempts = (("none", body), ("strip-8-byte-prefix", body[8:]))
+    last_error: str | None = None
+    for transform, candidate in attempts:
+        if len(candidate) < 188:
+            continue
+        with tempfile.NamedTemporaryFile(suffix=".ts") as handle:
+            handle.write(candidate)
+            handle.flush()
+            completed = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "json",
+                    handle.name,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        if completed.returncode != 0:
+            last_error = completed.stderr.strip()[-600:]
+            continue
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            last_error = str(error)
+            continue
+        video_streams = sum(
+            1 for item in payload.get("streams", []) if item.get("codec_type") == "video"
+        )
+        if video_streams > 0:
+            return True, transform, video_streams, None
+        last_error = "ffprobe found no video stream"
+    return False, "none", 0, last_error
 
 
 async def main_async() -> int:
@@ -124,12 +205,15 @@ async def main_async() -> int:
         "hls_detected": False,
         "manifest_valid": False,
         "segment_valid": False,
+        "ffprobe": "not-run",
         "encrypted": False,
         "attempts": 0,
         "captured_manifests": 0,
+        "captured_segments": 0,
         "detail": None,
     }
-    captures: list[CapturedManifest] = []
+    manifests: list[CapturedResource] = []
+    segments: list[CapturedResource] = []
     response_tasks: list[asyncio.Task[None]] = []
 
     async with async_playwright() as playwright:
@@ -157,17 +241,33 @@ async def main_async() -> int:
             try:
                 headers = await response.all_headers()
                 content_type = headers.get("content-type", "")
-                if not is_manifest(response.url, content_type):
-                    return
-                captures.append(
-                    CapturedManifest(
-                        url=response.url,
-                        status=response.status,
-                        body=await response.body(),
-                        content_type=content_type,
-                        request_headers=replay_headers(await response.request.all_headers()),
+                request_headers = replay_headers(await response.request.all_headers())
+                if is_manifest(response.url, content_type):
+                    manifests.append(
+                        CapturedResource(
+                            url=response.url,
+                            status=response.status,
+                            body=await response.body(),
+                            content_type=content_type,
+                            request_headers=request_headers,
+                        )
                     )
-                )
+                elif (
+                    len(segments) < 8
+                    and response.status in range(200, 300)
+                    and is_segment(response.url, content_type)
+                ):
+                    body = await response.body()
+                    if 188 <= len(body) <= 25_000_000:
+                        segments.append(
+                            CapturedResource(
+                                url=response.url,
+                                status=response.status,
+                                body=body,
+                                content_type=content_type,
+                                request_headers=request_headers,
+                            )
+                        )
             except Exception:
                 return
 
@@ -195,9 +295,18 @@ async def main_async() -> int:
                 if hls_url:
                     break
 
+            if hls_url:
+                for frame in page.frames:
+                    try:
+                        await frame.evaluate(PLAY_VIDEOS)
+                    except Exception:
+                        pass
+                await page.wait_for_timeout(12_000)
+
             if response_tasks:
                 await asyncio.gather(*response_tasks, return_exceptions=True)
-            payload["captured_manifests"] = len(captures)
+            payload["captured_manifests"] = len(manifests)
+            payload["captured_segments"] = len(segments)
 
             if not hls_url:
                 payload["detail"] = "window.hls.url was not available after 20 seconds"
@@ -208,8 +317,8 @@ async def main_async() -> int:
                 captured = next(
                     (
                         item
-                        for item in captures
-                        if item.url == hls_url
+                        for item in manifests
+                        if same_resource(item.url, hls_url)
                         and item.status in range(200, 300)
                         and b"#EXTM3U" in item.body
                     ),
@@ -227,7 +336,7 @@ async def main_async() -> int:
                     payload["manifest_content_type"] = captured.content_type
                     payload["manifest_valid"] = "#EXTM3U" in current_text
 
-                    for depth in range(3):
+                    for depth in range(4):
                         payload["encrypted"] = payload["encrypted"] or "#EXT-X-KEY" in current_text
                         if payload["encrypted"]:
                             break
@@ -240,33 +349,73 @@ async def main_async() -> int:
                             "#EXT-X-STREAM-INF" in current_text
                             or entry.lower().split("?", 1)[0].endswith(".m3u8")
                         )
+
                         if is_child_playlist:
-                            child = await browser_request(context, entry_url, headers)
-                            payload[f"playlist_{depth + 1}_status"] = child["status"]
-                            payload[f"playlist_{depth + 1}_bytes"] = child["bytes"]
-                            if child["status"] not in range(200, 300) or "#EXTM3U" not in child["text"]:
-                                payload["detail"] = f"child playlist validation failed: HTTP {child['status']}"
+                            child_capture = next(
+                                (
+                                    item
+                                    for item in manifests
+                                    if same_resource(item.url, entry_url)
+                                    and item.status in range(200, 300)
+                                    and b"#EXTM3U" in item.body
+                                ),
+                                None,
+                            )
+                            if child_capture is not None:
+                                child_status = child_capture.status
+                                child_body = child_capture.body
+                                child_text = child_body.decode("utf-8", errors="ignore")
+                                headers = child_capture.request_headers
+                                payload[f"playlist_{depth + 1}_source"] = "captured-browser-response"
+                            else:
+                                child = await browser_request(context, entry_url, headers)
+                                child_status = child["status"]
+                                child_body = child["body"]
+                                child_text = child["text"]
+                                payload[f"playlist_{depth + 1}_source"] = "captured-headers-request"
+                            payload[f"playlist_{depth + 1}_status"] = child_status
+                            payload[f"playlist_{depth + 1}_bytes"] = len(child_body)
+                            if child_status not in range(200, 300) or "#EXTM3U" not in child_text:
+                                payload["detail"] = f"child playlist validation failed: HTTP {child_status}"
                                 break
                             current_url = entry_url
-                            current_text = child["text"]
+                            current_text = child_text
                             continue
 
-                        segment = await browser_request(
-                            context,
-                            entry_url,
-                            headers,
-                            byte_range=True,
+                        segment_capture = next(
+                            (item for item in segments if same_resource(item.url, entry_url)),
+                            None,
                         )
+                        if segment_capture is not None:
+                            segment_status = segment_capture.status
+                            segment_body = segment_capture.body
+                            payload["segment_source"] = "captured-browser-response"
+                        else:
+                            segment = await browser_request(
+                                context,
+                                entry_url,
+                                headers,
+                                byte_range=True,
+                            )
+                            segment_status = segment["status"]
+                            segment_body = segment["body"]
+                            payload["segment_source"] = "captured-headers-request"
+
                         payload["segment_host"] = urlsplit(entry_url).netloc
                         payload["segment_path"] = urlsplit(entry_url).path
-                        payload["segment_status"] = segment["status"]
-                        payload["segment_bytes"] = segment["bytes"]
+                        payload["segment_status"] = segment_status
+                        payload["segment_bytes"] = len(segment_body)
+                        playable, transform, video_streams, error = probe_video_stream(segment_body)
+                        payload["segment_transform"] = transform
+                        payload["video_streams"] = video_streams
+                        payload["ffprobe"] = "success" if playable else "failed"
                         payload["segment_valid"] = (
-                            segment["status"] in range(200, 300)
-                            and segment["bytes"] > 0
+                            segment_status in range(200, 300)
+                            and len(segment_body) > 0
+                            and playable
                         )
                         if not payload["segment_valid"]:
-                            payload["detail"] = f"segment validation failed: HTTP {segment['status']}"
+                            payload["detail"] = error or f"segment validation failed: HTTP {segment_status}"
                         break
         except Exception as error:
             payload["navigation"] = "failed"
@@ -280,6 +429,7 @@ async def main_async() -> int:
         payload["hls_detected"]
         and payload["manifest_valid"]
         and payload["segment_valid"]
+        and payload["ffprobe"] == "success"
         and not payload["encrypted"]
     )
     output.parent.mkdir(parents=True, exist_ok=True)
