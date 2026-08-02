@@ -15,17 +15,20 @@ android {
         targetSdk = 36
         versionCode = 20
         versionName = "2.0.0-dev8-browser"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
-        }
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        debug {
+            ndk {
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
+        }
         release {
             isMinifyEnabled = false
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
         }
     }
 
