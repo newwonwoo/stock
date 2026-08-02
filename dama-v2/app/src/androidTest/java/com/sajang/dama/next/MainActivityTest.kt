@@ -1,6 +1,6 @@
 package com.sajang.dama.next
 
-import androidx.compose.ui.test.assertExists
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -22,7 +22,7 @@ class MainActivityTest {
         analyze("https://cdn.example.com/video/sample.mp4?token=secret")
 
         waitForStatus("추출 성공")
-        composeRule.onNodeWithTag("shareDiagnosticsButton").assertExists()
+        composeRule.onNodeWithTag("shareDiagnosticsButton").assertIsDisplayed()
     }
 
     @Test
@@ -32,7 +32,7 @@ class MainActivityTest {
         waitForStatus("추출 성공", timeoutMillis = 120_000)
         composeRule.onNodeWithTag("statusTitle")
             .assertTextContains("yt-dlp", substring = true)
-        composeRule.onNodeWithTag("shareDiagnosticsButton").assertExists()
+        composeRule.onNodeWithTag("shareDiagnosticsButton").assertIsDisplayed()
     }
 
     @Test
@@ -40,7 +40,7 @@ class MainActivityTest {
         analyze("not-a-url")
 
         waitForStatus("분석 실패")
-        composeRule.onNodeWithTag("shareDiagnosticsButton").assertExists()
+        composeRule.onNodeWithTag("shareDiagnosticsButton").assertIsDisplayed()
     }
 
     private fun analyze(url: String) {
