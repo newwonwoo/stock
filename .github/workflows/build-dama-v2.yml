@@ -171,7 +171,7 @@ jobs:
   emulator:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -208,7 +208,7 @@ jobs:
           cat /tmp/dama-fixture.log
           exit 1
 
-      - name: Emulator UI, Android yt-dlp and MediaStore tests
+      - name: Emulator UI, browser capture, yt-dlp and MediaStore tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -229,17 +229,20 @@ jobs:
             fi
 
             tests=(
-              invalidInputProducesFailureAndDiagnosticFile
-              directMp4IsDownloadedAndSavedToMediaStore
-              controlledFixturePageIsExtractedByAndroidYtDlp
+              "com.sajang.dama.next.MainActivityTest#invalidInputProducesFailureAndDiagnosticFile"
+              "com.sajang.dama.next.MainActivityTest#directMp4IsDownloadedAndSavedToMediaStore"
+              "com.sajang.dama.next.MainActivityTest#controlledFixturePageIsExtractedByAndroidYtDlp"
+              "com.sajang.dama.next.BrowserCaptureActivityTest#capturesDirectLinkFromLocalJsonFixture"
+              "com.sajang.dama.next.BrowserCaptureActivityTest#capturesHlsLinkFromLocalWindowFixture"
             )
             overall=0
-            for test_name in "${tests[@]}"; do
+            for test_selector in "${tests[@]}"; do
               adb shell pm clear com.sajang.dama.next >/dev/null || true
               adb logcat -c || true
+              test_name=$(echo "$test_selector" | tr '#.' '__')
               log_file="dama-v2/app/build/reports/androidTests/isolated/${test_name}.txt"
               timeout 180s adb shell am instrument -w -r \
-                -e class "com.sajang.dama.next.MainActivityTest#${test_name}" \
+                -e class "$test_selector" \
                 com.sajang.dama.next.test/androidx.test.runner.AndroidJUnitRunner \
                 | tee "$log_file"
               command_status=${PIPESTATUS[0]}
