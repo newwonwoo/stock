@@ -225,7 +225,7 @@ jobs:
   emulator:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -246,6 +246,13 @@ jobs:
 
       - name: Install Android SDK 36
         run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
 
       - name: Start deterministic fixture server
         run: |
@@ -268,7 +275,8 @@ jobs:
           api-level: 35
           arch: x86_64
           profile: pixel_6
-          disable-animations: true
+          emulator-boot-timeout: 900
+          disable-animations: false
           emulator-options: >-
             -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
             -camera-back none -no-metrics
