@@ -56,11 +56,57 @@ jobs:
       - name: Compile emulator test APK
         run: gradle -p dama-v2 assembleDebugAndroidTest --stacktrace
 
-      - name: Upload verified APK
+      - name: Build arm64 release APK
+        run: gradle -p dama-v2 assembleRelease --stacktrace
+
+      - name: Verify release identity and ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="dama-v2/app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -s "$APK"
+          mkdir -p dama-v2/build/release-metadata
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" \
+            | tee dama-v2/build/release-metadata/aapt-badging.txt
+          grep -q "package: name='com.sajang.dama' versionCode='20'" \
+            dama-v2/build/release-metadata/aapt-badging.txt
+          unzip -Z1 "$APK" \
+            | awk -F/ '/^lib\// {print $2}' \
+            | sort -u \
+            | tee dama-v2/build/release-metadata/abis.txt
+          test "$(cat dama-v2/build/release-metadata/abis.txt)" = "arm64-v8a"
+          sha256sum "$APK" | tee dama-v2/build/release-metadata/sha256.txt
+
+      - name: Stage official Android signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLS="dama-v2/build/android-signing-tools"
+          mkdir -p "$TOOLS/lib"
+          cp "$ANDROID_HOME/build-tools/35.0.0/apksigner" "$TOOLS/"
+          cp "$ANDROID_HOME/build-tools/35.0.0/zipalign" "$TOOLS/"
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" "$TOOLS/lib/"
+          chmod +x "$TOOLS/apksigner" "$TOOLS/zipalign"
+
+      - name: Upload verified debug APK
         uses: actions/upload-artifact@v4
         with:
           name: dama-v2-verified-debug
           path: dama-v2/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload arm64 release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-arm64-release-unsigned
+          path: |
+            dama-v2/app/build/outputs/apk/release/app-release-unsigned.apk
+            dama-v2/build/release-metadata
+
+      - name: Upload Android signing tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-tools-35-signing
+          path: dama-v2/build/android-signing-tools
 
       - name: Upload test reports
         if: always()
