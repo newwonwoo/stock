@@ -43,6 +43,68 @@ class ExtractionPipelineTest {
     }
 
     @Test
+    fun mvpCandidatePrefersMuxedDirectVideo() {
+        val selected = selectMvpDownloadCandidate(
+            listOf(
+                MediaDescriptor(
+                    sourceUrl = "https://cdn.example.com/video-only.mp4",
+                    kind = MediaKind.DIRECT,
+                    trackRole = TrackRole.VIDEO_ONLY,
+                    height = 1080
+                ),
+                MediaDescriptor(
+                    sourceUrl = "https://cdn.example.com/muxed.mp4",
+                    kind = MediaKind.DIRECT,
+                    trackRole = TrackRole.MUXED,
+                    height = 720
+                ),
+                MediaDescriptor(
+                    sourceUrl = "https://cdn.example.com/master.m3u8",
+                    kind = MediaKind.HLS,
+                    trackRole = TrackRole.MUXED,
+                    height = 2160
+                )
+            )
+        )
+
+        assertEquals("https://cdn.example.com/muxed.mp4", selected?.sourceUrl)
+    }
+
+    @Test
+    fun mvpCandidateRejectsDrmAndNonDirectFormats() {
+        val selected = selectMvpDownloadCandidate(
+            listOf(
+                MediaDescriptor(
+                    sourceUrl = "https://cdn.example.com/protected.mp4",
+                    kind = MediaKind.DIRECT,
+                    drmProtected = true
+                ),
+                MediaDescriptor(
+                    sourceUrl = "https://cdn.example.com/master.m3u8",
+                    kind = MediaKind.HLS
+                )
+            )
+        )
+
+        assertEquals(null, selected)
+    }
+
+    @Test
+    fun displayNameUsesSafeMp4Extension() {
+        val name = buildDisplayName(
+            title = "잘못된:/영상*이름",
+            mimeType = "video/mp4",
+            sourceUrl = "https://cdn.example.com/file",
+            contentDisposition = null
+        )
+
+        assertTrue(name.endsWith(".mp4"))
+        assertFalse(name.contains('/'))
+        assertFalse(name.contains(':'))
+        assertFalse(name.contains('*'))
+    }
+
+    @Test
     fun ytDlp403IsClassifiedExplicitly() {
         val detail = classifyYtDlpFailure(
             IllegalStateException("ERROR: HTTP Error 403: Forbidden")
