@@ -16,86 +16,90 @@ class DirectDownloadEngine(
     override val id: String = "direct-http"
 
     private val appContext = context.applicationContext
+    private val streamDownloader by lazy { YtDlpDownloadEngine(appContext) }
 
-    override suspend fun download(media: MediaDescriptor): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            require(media.kind == MediaKind.DIRECT) {
-                "DirectDownloadEngine supports DIRECT media only"
-            }
-            require(!media.drmProtected) {
-                "DRM-protected media cannot be downloaded"
-            }
+    override suspend fun download(media: MediaDescriptor): Result<String> {
+        if (media.kind != MediaKind.DIRECT || media.pageUrl != null) {
+            return streamDownloader.download(media)
+        }
 
-            val connection = (URL(media.sourceUrl).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = true
-                connectTimeout = 15_000
-                readTimeout = 30_000
-                requestMethod = "GET"
-                setRequestProperty("Accept", "*/*")
-                media.headers.forEach { (name, value) ->
-                    if (name.isNotBlank() && value.isNotBlank()) {
-                        setRequestProperty(name, value)
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                require(!media.drmProtected) {
+                    "DRM-protected media cannot be downloaded"
+                }
+
+                val connection = (URL(media.sourceUrl).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = true
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "*/*")
+                    media.headers.forEach { (name, value) ->
+                        if (name.isNotBlank() && value.isNotBlank()) {
+                            setRequestProperty(name, value)
+                        }
+                    }
+                    media.cookies?.takeIf { it.isNotBlank() }?.let {
+                        setRequestProperty("Cookie", it)
                     }
                 }
-                media.cookies?.takeIf { it.isNotBlank() }?.let {
-                    setRequestProperty("Cookie", it)
-                }
-            }
 
-            var pendingUri: Uri? = null
-            try {
-                connection.connect()
-                val responseCode = connection.responseCode
-                if (responseCode !in 200..299) {
-                    error("HTTP $responseCode ${connection.responseMessage.orEmpty()}".trim())
-                }
-
-                val mimeType = connection.contentType
-                    ?.substringBefore(';')
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?: media.mimeType
-                    ?: inferMimeType(media.sourceUrl)
-                    ?: "video/mp4"
-
-                val displayName = buildDisplayName(
-                    title = media.title,
-                    mimeType = mimeType,
-                    sourceUrl = media.sourceUrl,
-                    contentDisposition = connection.getHeaderField("Content-Disposition")
-                )
-
-                val values = ContentValues().apply {
-                    put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
-                    put(MediaStore.Video.Media.MIME_TYPE, mimeType)
-                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/담아")
-                    put(MediaStore.Video.Media.IS_PENDING, 1)
-                }
-
-                val resolver = appContext.contentResolver
-                pendingUri = resolver.insert(
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                    values
-                ) ?: error("MediaStore insert returned null")
-
-                resolver.openOutputStream(pendingUri, "w")?.use { output ->
-                    connection.inputStream.use { input ->
-                        input.copyTo(output, DEFAULT_BUFFER_SIZE)
+                var pendingUri: Uri? = null
+                try {
+                    connection.connect()
+                    val responseCode = connection.responseCode
+                    if (responseCode !in 200..299) {
+                        error("HTTP $responseCode ${connection.responseMessage.orEmpty()}".trim())
                     }
-                } ?: error("Unable to open MediaStore output stream")
 
-                val completed = ContentValues().apply {
-                    put(MediaStore.Video.Media.IS_PENDING, 0)
+                    val mimeType = connection.contentType
+                        ?.substringBefore(';')
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                        ?: media.mimeType
+                        ?: inferMimeType(media.sourceUrl)
+                        ?: "video/mp4"
+
+                    val displayName = buildDisplayName(
+                        title = media.title,
+                        mimeType = mimeType,
+                        sourceUrl = media.sourceUrl,
+                        contentDisposition = connection.getHeaderField("Content-Disposition")
+                    )
+
+                    val values = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+                        put(MediaStore.Video.Media.MIME_TYPE, mimeType)
+                        put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/담아")
+                        put(MediaStore.Video.Media.IS_PENDING, 1)
+                    }
+
+                    val resolver = appContext.contentResolver
+                    pendingUri = resolver.insert(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        values
+                    ) ?: error("MediaStore insert returned null")
+
+                    resolver.openOutputStream(pendingUri, "w")?.use { output ->
+                        connection.inputStream.use { input ->
+                            input.copyTo(output, DEFAULT_BUFFER_SIZE)
+                        }
+                    } ?: error("Unable to open MediaStore output stream")
+
+                    val completed = ContentValues().apply {
+                        put(MediaStore.Video.Media.IS_PENDING, 0)
+                    }
+                    resolver.update(pendingUri, completed, null, null)
+                    pendingUri.toString()
+                } catch (error: Throwable) {
+                    pendingUri?.let { uri ->
+                        runCatching { appContext.contentResolver.delete(uri, null, null) }
+                    }
+                    throw error
+                } finally {
+                    connection.disconnect()
                 }
-                resolver.update(pendingUri, completed, null, null)
-                pendingUri.toString()
-            } catch (error: Throwable) {
-                pendingUri?.let { uri ->
-                    runCatching { appContext.contentResolver.delete(uri, null, null) }
-                }
-                throw error
-            } finally {
-                connection.disconnect()
             }
         }
     }
