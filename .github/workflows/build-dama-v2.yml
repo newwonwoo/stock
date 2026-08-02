@@ -64,3 +64,71 @@ jobs:
           path: |
             dama-v2/app/build/reports/tests/testDebugUnitTest
             dama-v2/app/build/reports/lint-results-debug.html
+
+  emulator:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Install Android SDK 36
+        run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Start deterministic fixture server
+        run: |
+          nohup python dama-v2/test-harness/fixture_server.py \
+            --host 0.0.0.0 --port 8765 \
+            > /tmp/dama-fixture.log 2>&1 &
+          echo $! > /tmp/dama-fixture.pid
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8765/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/dama-fixture.log
+          exit 1
+
+      - name: Emulator UI and Android yt-dlp tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+            -camera-back none
+          script: |
+            set +e
+            gradle -p dama-v2 connectedDebugAndroidTest --stacktrace
+            status=$?
+            mkdir -p dama-v2/app/build/reports/androidTests
+            adb logcat -d > dama-v2/app/build/reports/androidTests/logcat.txt || true
+            exit $status
+
+      - name: Upload emulator reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-emulator-reports
+          if-no-files-found: ignore
+          path: |
+            dama-v2/app/build/reports/androidTests
+            dama-v2/app/build/outputs/androidTest-results
+            /tmp/dama-fixture.log
