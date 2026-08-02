@@ -68,7 +68,7 @@ jobs:
   target-sites:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -81,22 +81,36 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          python -m pip install --disable-pip-version-check yt-dlp curl-cffi
+          python -m pip install --disable-pip-version-check "yt-dlp[default,curl-cffi]" playwright
+          python -m yt_dlp --list-impersonate-targets
+          python -m playwright install --with-deps chromium
 
-      - name: Probe PikPak, njavtv and Pornhub
+      - name: Probe sites with yt-dlp and save playable samples
         id: probe
         shell: bash
         run: |
           set +e
           mkdir -p dama-v2/build/target-sites
-          DAMA_TARGET_REPORT=dama-v2/build/target-sites/report.json \
+          DAMA_TARGET_REPORT=dama-v2/build/target-sites/yt-dlp-report.json \
             python dama-v2/test-harness/probe_target_sites.py \
-            | tee dama-v2/build/target-sites/console.log
+            | tee dama-v2/build/target-sites/yt-dlp-console.log
           status=${PIPESTATUS[0]}
-          echo "$status" > dama-v2/build/target-sites/status.txt
+          echo "$status" > dama-v2/build/target-sites/yt-dlp-status.txt
           exit 0
 
-      - name: Upload target-site report
+      - name: Probe sites with Chromium network sniffing
+        id: browser_probe
+        shell: bash
+        run: |
+          set +e
+          DAMA_BROWSER_REPORT=dama-v2/build/target-sites/browser-report.json \
+            python dama-v2/test-harness/browser_sniff_targets.py \
+            | tee dama-v2/build/target-sites/browser-console.log
+          status=${PIPESTATUS[0]}
+          echo "$status" > dama-v2/build/target-sites/browser-status.txt
+          exit 0
+
+      - name: Upload target-site reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -104,8 +118,8 @@ jobs:
           if-no-files-found: error
           path: dama-v2/build/target-sites
 
-      - name: Enforce real target-site MVP gate
-        run: test "$(cat dama-v2/build/target-sites/status.txt)" = "0"
+      - name: Enforce real target-site MVP save gate
+        run: test "$(cat dama-v2/build/target-sites/yt-dlp-status.txt)" = "0"
 
   emulator:
     needs: verify
