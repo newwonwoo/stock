@@ -2,6 +2,7 @@ package com.sajang.dama.next
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -78,5 +79,53 @@ class ExtractionPipelineTest {
         )
 
         assertEquals("https://example.com/watch/123", cleaned)
+    }
+
+    @Test
+    fun connectionResetRetriesExactlyOnceWithIpv4() = runTest {
+        val attempts = mutableListOf<Boolean>()
+
+        val result = executeWithSingleIpv4Retry { forceIpv4 ->
+            attempts += forceIpv4
+            if (!forceIpv4) {
+                throw IllegalStateException("[Errno 104] Connection reset by peer")
+            }
+            "recovered"
+        }
+
+        assertEquals("recovered", result)
+        assertEquals(listOf(false, true), attempts)
+    }
+
+    @Test
+    fun nonResetFailureIsNotRetried() = runTest {
+        val attempts = mutableListOf<Boolean>()
+
+        val error = runCatching {
+            executeWithSingleIpv4Retry<String> { forceIpv4 ->
+                attempts += forceIpv4
+                throw IllegalStateException("HTTP Error 403: Forbidden")
+            }
+        }.exceptionOrNull()
+
+        assertNotNull(error)
+        assertEquals(listOf(false), attempts)
+        assertEquals(FailureCode.HTTP_FORBIDDEN, classifyYtDlpFailure(error!!).code)
+    }
+
+    @Test
+    fun repeatedResetStopsAfterTwoAttempts() = runTest {
+        val attempts = mutableListOf<Boolean>()
+
+        val error = runCatching {
+            executeWithSingleIpv4Retry<String> { forceIpv4 ->
+                attempts += forceIpv4
+                throw IllegalStateException("Connection reset by peer")
+            }
+        }.exceptionOrNull()
+
+        assertNotNull(error)
+        assertEquals(listOf(false, true), attempts)
+        assertEquals(FailureCode.NETWORK_RESET, classifyYtDlpFailure(error!!).code)
     }
 }
