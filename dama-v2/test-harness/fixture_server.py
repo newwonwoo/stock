@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,7 +12,7 @@ from urllib.parse import urlparse
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
-    server_version = "DamaFixture/1.0"
+    server_version = "DamaFixture/1.1"
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -29,6 +30,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
         for name, value in headers.items():
             self.send_header(name.replace("_", "-"), value)
         self.end_headers()
@@ -36,6 +38,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _absolute(self, path: str) -> str:
+        request_host = self.headers.get("Host", "").strip()
+        if request_host:
+            return f"http://{request_host}{path}"
         host, port = self.server.server_address
         public_host = "127.0.0.1" if host in {"", "0.0.0.0"} else host
         return f"http://{public_host}:{port}{path}"
@@ -80,6 +85,50 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", body, send_body=send_body)
             return
 
+        if path == "/page/browser-json":
+            api = self._absolute("/api/public-media")
+            body = (
+                "<!doctype html><html><head><title>fixture browser json</title></head>"
+                "<body><div id=\"status\">loading</div>"
+                "<script>"
+                f"fetch('{api}').then(r => r.json()).then(() => "
+                "document.getElementById('status').textContent='done');"
+                "</script></body></html>"
+            ).encode()
+            self._send(200, "text/html; charset=utf-8", body, send_body=send_body)
+            return
+
+        if path == "/page/browser-hls":
+            manifest = self._absolute("/hls/master.m3u8")
+            body = (
+                "<!doctype html><html><head><title>fixture browser hls</title></head>"
+                "<body><div id=\"status\">loading</div><script>"
+                f"setTimeout(() => {{ window.hls = {{url: '{manifest}'}}; "
+                "document.getElementById('status').textContent='ready'; }}, 400);"
+                "</script></body></html>"
+            ).encode()
+            self._send(200, "text/html; charset=utf-8", body, send_body=send_body)
+            return
+
+        if path == "/api/public-media":
+            payload = {
+                "file_info": {
+                    "name": "fixture.mp4",
+                    "web_content_link": self._absolute("/media/sample.mp4"),
+                    "medias": [
+                        {"link": {"url": self._absolute("/media/sample.mp4?quality=transcoded")}}
+                    ],
+                    "thumbnail_link": self._absolute("/image/poster.jpg"),
+                }
+            }
+            self._send(
+                200,
+                "application/json; charset=utf-8",
+                json.dumps(payload).encode(),
+                send_body=send_body,
+            )
+            return
+
         if path == "/media/sample.mp4":
             body = b"\x00\x00\x00\x18ftypmp42dama-fixture"
             self._send(
@@ -89,6 +138,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 send_body=send_body,
                 Accept_Ranges="bytes",
             )
+            return
+
+        if path == "/image/poster.jpg":
+            self._send(200, "image/jpeg", b"fixture-poster", send_body=send_body)
             return
 
         if path == "/hls/master.m3u8":
