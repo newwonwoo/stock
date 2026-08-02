@@ -1,12 +1,12 @@
 package com.sajang.dama.next
 
 import android.provider.MediaStore
+import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
-import androidx.compose.ui.test.fetchSemanticsNodes
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
@@ -64,9 +64,11 @@ class MainActivityTest {
         timeoutMillis: Long = 20_000
     ) {
         composeRule.waitUntil(timeoutMillis) {
-            composeRule.onAllNodesWithText(expected, substring = true)
-                .fetchSemanticsNodes()
-                .isNotEmpty()
+            runCatching {
+                composeRule.onNodeWithText(expected, substring = true)
+                    .assertExists()
+                true
+            }.getOrDefault(false)
         }
     }
 
