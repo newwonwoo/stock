@@ -71,7 +71,7 @@ jobs:
   target-sites:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -97,6 +97,16 @@ jobs:
             python dama-v2/test-harness/probe_target_sites.py \
             | tee dama-v2/build/target-sites/yt-dlp-console.log
           echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/yt-dlp-status.txt
+          exit 0
+
+      - name: Probe Pornhub with bounded desktop retries
+        shell: bash
+        run: |
+          set +e
+          DAMA_PORNHUB_REPORT=dama-v2/build/target-sites/pornhub-report.json \
+            python dama-v2/test-harness/probe_pornhub.py \
+            | tee dama-v2/build/target-sites/pornhub-console.log
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/pornhub-status.txt
           exit 0
 
       - name: Probe sites with Chromium network sniffing
@@ -137,18 +147,12 @@ jobs:
           import sys
 
           root = pathlib.Path("dama-v2/build/target-sites")
-          ytdlp = json.loads((root / "yt-dlp-report.json").read_text())
+          pornhub = json.loads((root / "pornhub-report.json").read_text())
           njavtv = json.loads((root / "njavtv-hls-report.json").read_text())
           pikpak = json.loads((root / "pikpak-share-report.json").read_text())
 
-          pornhub = next(item for item in ytdlp["results"] if item["site"] == "pornhub")
           checks = {
-              "pornhub": (
-                  pornhub["extraction"] == "success"
-                  and pornhub["sample_download"] == "success"
-                  and pornhub["ffprobe"] == "success"
-                  and pornhub["video_streams"] > 0
-              ),
+              "pornhub": bool(pornhub.get("passed")),
               "njavtv": bool(njavtv.get("passed")),
               "pikpak": bool(pikpak.get("passed")),
           }
