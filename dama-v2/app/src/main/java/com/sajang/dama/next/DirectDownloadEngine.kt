@@ -104,10 +104,11 @@ class DirectDownloadEngine(
 internal fun selectMvpDownloadCandidate(media: List<MediaDescriptor>): MediaDescriptor? {
     return media
         .asSequence()
-        .filter { it.kind == MediaKind.DIRECT && !it.drmProtected }
+        .filter { !it.drmProtected && it.trackRole != TrackRole.AUDIO_ONLY }
         .sortedWith(
             compareByDescending<MediaDescriptor> { it.trackRole == TrackRole.MUXED }
                 .thenByDescending { it.height ?: 0 }
+                .thenByDescending { it.kind == MediaKind.DIRECT }
                 .thenByDescending { it.fileSizeBytes ?: 0L }
         )
         .firstOrNull()
