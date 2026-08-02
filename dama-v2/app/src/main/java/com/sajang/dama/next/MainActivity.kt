@@ -1,9 +1,12 @@
 package com.sajang.dama.next
 
+import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -88,6 +91,76 @@ private fun DamaV2App(initialInput: String) {
     var diagnosticFile by remember { mutableStateOf<File?>(null) }
     var activeDiagnostics by remember { mutableStateOf<DiagnosticSession?>(null) }
 
+    val browserLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val diagnostics = activeDiagnostics ?: DiagnosticSession().also {
+            activeDiagnostics = it
+        }
+        if (result.resultCode == Activity.RESULT_OK) {
+            val descriptor = BrowserCaptureContract.toDescriptor(result.data)
+            if (descriptor != null) {
+                diagnostics.record(
+                    category = "BROWSER_SUCCESS",
+                    message = "kind=${descriptor.kind}",
+                    detail = descriptor.sourceUrl
+                )
+                uiState = ResolveUiState.Ready(
+                    ExtractionResult.Success(
+                        extractorId = "browser-capture",
+                        media = listOf(descriptor)
+                    )
+                )
+            } else {
+                val detail = FailureDetail(
+                    stage = PipelineStage.EXTRACTING,
+                    code = FailureCode.MEDIA_REQUEST_NOT_FOUND,
+                    message = "브라우저 결과에 유효한 미디어 주소가 없습니다."
+                )
+                diagnostics.record("BROWSER_FAILURE", detail.code.name, detail.message)
+                uiState = ResolveUiState.Failed(detail)
+            }
+        } else {
+            val message = result.data
+                ?.getStringExtra(BrowserCaptureContract.EXTRA_ERROR)
+                ?.takeIf { it.isNotBlank() }
+                ?: "브라우저에서 다운로드 가능한 미디어 요청을 찾지 못했습니다."
+            val detail = FailureDetail(
+                stage = PipelineStage.EXTRACTING,
+                code = FailureCode.MEDIA_REQUEST_NOT_FOUND,
+                message = message,
+                retryable = true
+            )
+            diagnostics.record("BROWSER_FAILURE", detail.code.name, message)
+            uiState = ResolveUiState.Failed(detail)
+        }
+        diagnosticFile = runCatching {
+            diagnostics.writeToCache(context)
+        }.getOrNull()
+    }
+
+    val launchBrowserCapture: (String, DiagnosticSession) -> Unit = { rawInput, diagnostics ->
+        val pageUrl = normalizeHttpUrl(rawInput)
+        if (pageUrl == null) {
+            val detail = FailureDetail(
+                stage = PipelineStage.VALIDATING_URL,
+                code = FailureCode.INVALID_URL,
+                message = "올바른 http 또는 https 주소가 아닙니다."
+            )
+            uiState = ResolveUiState.Failed(detail)
+        } else {
+            diagnostics.record(
+                category = "BROWSER",
+                message = "capture launched",
+                detail = pageUrl
+            )
+            uiState = ResolveUiState.Working(PipelineStage.EXTRACTING)
+            browserLauncher.launch(
+                BrowserCaptureContract.createIntent(context, pageUrl)
+            )
+        }
+    }
+
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(
@@ -103,7 +176,7 @@ private fun DamaV2App(initialInput: String) {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "주소를 분석한 뒤 직접 다운로드 가능한 형식을 Movies/담아에 저장합니다.",
+                    text = "주소를 분석하고 필요한 경우 브라우저에서 영상 요청을 감지한 뒤 Movies/담아에 저장합니다.",
                     style = MaterialTheme.typography.bodyMedium
                 )
 
@@ -136,65 +209,79 @@ private fun DamaV2App(initialInput: String) {
                         diagnosticFile = null
                         downloadState = DownloadUiState.Idle
 
-                        scope.launch {
-                            uiState = ResolveUiState.Working(PipelineStage.VALIDATING_URL)
-                            val result = pipeline.resolve(
-                                input = input,
-                                reporter = StageReporter { stage ->
-                                    diagnostics.record("STAGE", stage.name)
-                                    uiState = ResolveUiState.Working(stage)
-                                }
-                            )
+                        if (BrowserCaptureContract.shouldUseBrowserCapture(input)) {
+                            launchBrowserCapture(input, diagnostics)
+                        } else {
+                            scope.launch {
+                                uiState = ResolveUiState.Working(PipelineStage.VALIDATING_URL)
+                                val result = pipeline.resolve(
+                                    input = input,
+                                    reporter = StageReporter { stage ->
+                                        diagnostics.record("STAGE", stage.name)
+                                        uiState = ResolveUiState.Working(stage)
+                                    }
+                                )
 
-                            when (result) {
-                                is ExtractionResult.Success -> {
-                                    diagnostics.record(
-                                        category = "SUCCESS",
-                                        message = "extractor=${result.extractorId}",
-                                        detail = "mediaCount=${result.media.size}; kinds=${result.media.joinToString { it.kind.name }}"
-                                    )
-                                    uiState = ResolveUiState.Ready(result)
+                                when (result) {
+                                    is ExtractionResult.Success -> {
+                                        diagnostics.record(
+                                            category = "SUCCESS",
+                                            message = "extractor=${result.extractorId}",
+                                            detail = "mediaCount=${result.media.size}; kinds=${result.media.joinToString { it.kind.name }}"
+                                        )
+                                        uiState = ResolveUiState.Ready(result)
+                                    }
+
+                                    is ExtractionResult.Failure -> {
+                                        val fallback = decideBrowserFallback(result.detail)
+                                        diagnostics.record(
+                                            category = "FAILURE",
+                                            message = "${result.detail.stage}/${result.detail.code}",
+                                            detail = result.detail.technicalDetail
+                                        )
+                                        diagnostics.record(
+                                            category = "FALLBACK",
+                                            message = "eligible=${fallback.eligible}; reason=${fallback.reason}",
+                                            detail = fallback.explanation
+                                        )
+                                        if (fallback.eligible) {
+                                            launchBrowserCapture(input, diagnostics)
+                                        } else {
+                                            uiState = ResolveUiState.Failed(result.detail)
+                                        }
+                                    }
+
+                                    is ExtractionResult.Unsupported -> {
+                                        val detail = FailureDetail(
+                                            stage = PipelineStage.EXTRACTING,
+                                            code = FailureCode.EXTRACTOR_UNSUPPORTED,
+                                            message = result.reason
+                                        )
+                                        val fallback = decideBrowserFallback(detail)
+                                        diagnostics.record(
+                                            category = "FAILURE",
+                                            message = "${detail.stage}/${detail.code}",
+                                            detail = result.reason
+                                        )
+                                        diagnostics.record(
+                                            category = "FALLBACK",
+                                            message = "eligible=${fallback.eligible}; reason=${fallback.reason}",
+                                            detail = fallback.explanation
+                                        )
+                                        if (fallback.eligible) {
+                                            launchBrowserCapture(input, diagnostics)
+                                        } else {
+                                            uiState = ResolveUiState.Failed(detail)
+                                        }
+                                    }
                                 }
 
-                                is ExtractionResult.Failure -> {
-                                    val fallback = decideBrowserFallback(result.detail)
-                                    diagnostics.record(
-                                        category = "FAILURE",
-                                        message = "${result.detail.stage}/${result.detail.code}",
-                                        detail = result.detail.technicalDetail
-                                    )
-                                    diagnostics.record(
-                                        category = "FALLBACK",
-                                        message = "eligible=${fallback.eligible}; reason=${fallback.reason}",
-                                        detail = fallback.explanation
-                                    )
-                                    uiState = ResolveUiState.Failed(result.detail)
-                                }
-
-                                is ExtractionResult.Unsupported -> {
-                                    val detail = FailureDetail(
-                                        stage = PipelineStage.EXTRACTING,
-                                        code = FailureCode.EXTRACTOR_UNSUPPORTED,
-                                        message = result.reason
-                                    )
-                                    val fallback = decideBrowserFallback(detail)
-                                    diagnostics.record(
-                                        category = "FAILURE",
-                                        message = "${detail.stage}/${detail.code}",
-                                        detail = result.reason
-                                    )
-                                    diagnostics.record(
-                                        category = "FALLBACK",
-                                        message = "eligible=${fallback.eligible}; reason=${fallback.reason}",
-                                        detail = fallback.explanation
-                                    )
-                                    uiState = ResolveUiState.Failed(detail)
+                                if (uiState !is ResolveUiState.Working) {
+                                    diagnosticFile = runCatching {
+                                        diagnostics.writeToCache(context)
+                                    }.getOrNull()
                                 }
                             }
-
-                            diagnosticFile = runCatching {
-                                diagnostics.writeToCache(context)
-                            }.getOrNull()
                         }
                     }
                 ) {
@@ -245,9 +332,9 @@ private fun DamaV2App(initialInput: String) {
                                 }
                                 if (candidate != null) {
                                     append("MVP 선택: ")
-                                    append(candidate.qualityLabel ?: candidate.formatId ?: "직접 형식")
+                                    append(candidate.qualityLabel ?: candidate.formatId ?: candidate.kind.name)
                                 } else {
-                                    append("직접 다운로드 가능한 형식이 없습니다.")
+                                    append("다운로드 가능한 형식이 없습니다.")
                                 }
                             }
                         )
@@ -263,7 +350,7 @@ private fun DamaV2App(initialInput: String) {
                                         downloadState = DownloadUiState.Working
                                         activeDiagnostics?.record(
                                             category = "DOWNLOAD",
-                                            message = "direct download started",
+                                            message = "download started",
                                             detail = candidate.sourceUrl
                                         )
 
@@ -308,12 +395,11 @@ private fun DamaV2App(initialInput: String) {
                                 appendLine(state.detail.message)
                                 appendLine(
                                     if (fallback.eligible) {
-                                        "다음 경로: 브라우저 폴백 (${fallback.reason})"
+                                        "브라우저 감지를 다시 시도할 수 있습니다."
                                     } else {
-                                        "다음 경로: 브라우저 폴백 안 함"
+                                        "브라우저 폴백 대상이 아닙니다."
                                     }
                                 )
-                                appendLine(fallback.explanation)
                                 state.detail.technicalDetail?.takeIf { it.isNotBlank() }?.let {
                                     append("상세: $it")
                                 }
@@ -407,7 +493,7 @@ private fun stageLabel(stage: PipelineStage): String = when (stage) {
     PipelineStage.IDLE -> "대기"
     PipelineStage.VALIDATING_URL -> "주소 검증 중"
     PipelineStage.INITIALIZING_ENGINE -> "yt-dlp 엔진 준비 중"
-    PipelineStage.EXTRACTING -> "영상 정보 추출 중"
+    PipelineStage.EXTRACTING -> "영상 정보·브라우저 요청 감지 중"
     PipelineStage.PARSING_FORMATS -> "화질·트랙 분석 중"
     PipelineStage.FORMATS_FOUND -> "미디어 형식 확인"
     PipelineStage.READY_TO_DOWNLOAD -> "다운로드 준비"
