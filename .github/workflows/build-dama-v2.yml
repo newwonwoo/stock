@@ -259,9 +259,8 @@ jobs:
             --name dama-ci \
             --package "system-images;android-35;default;x86_64" \
             --device "pixel_6"
-          echo "hw.cpu.ncore=2" >> "$HOME/.android/avd/dama-ci.avd/config.ini"
-          echo "hw.ramSize=2048" >> "$HOME/.android/avd/dama-ci.avd/config.ini"
-          echo "disk.dataPartition.size=6G" >> "$HOME/.android/avd/dama-ci.avd/config.ini"
+          emulator -list-avds | tee /tmp/dama-avds.txt
+          grep -Fxq "dama-ci" /tmp/dama-avds.txt
 
       - name: Start deterministic fixture server
         run: |
