@@ -12,8 +12,8 @@ android {
         applicationId = "com.sajang.dama.next"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "2.0.0-dev4-test"
+        versionCode = 5
+        versionName = "2.0.0-dev5-mvp"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -49,6 +49,7 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        jniLibs.useLegacyPackaging = true
     }
 }
 
