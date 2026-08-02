@@ -110,6 +110,18 @@ jobs:
           echo "$status" > dama-v2/build/target-sites/browser-status.txt
           exit 0
 
+      - name: Probe NjavTV HLS.js player directly
+        id: njavtv_hls_probe
+        shell: bash
+        run: |
+          set +e
+          DAMA_NJAVTV_REPORT=dama-v2/build/target-sites/njavtv-hls-report.json \
+            python dama-v2/test-harness/probe_njavtv_hls.py \
+            | tee dama-v2/build/target-sites/njavtv-hls-console.log
+          status=${PIPESTATUS[0]}
+          echo "$status" > dama-v2/build/target-sites/njavtv-hls-status.txt
+          exit 0
+
       - name: Upload target-site reports
         if: always()
         uses: actions/upload-artifact@v4
