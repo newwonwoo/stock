@@ -6,6 +6,32 @@ APP_ID="com.sajang.dama"
 TEST_RUNNER="com.sajang.dama.test/androidx.test.runner.AndroidJUnitRunner"
 mkdir -p "$REPORT_DIR"
 
+adb wait-for-device
+boot_ready=0
+for attempt in {1..90}; do
+  boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+  package_ready=$(adb shell cmd package list packages 2>/dev/null | head -n 1)
+  if [[ "$boot_completed" == "1" && -n "$package_ready" ]]; then
+    boot_ready=1
+    break
+  fi
+  sleep 2
+done
+
+if [[ "$boot_ready" -ne 1 ]]; then
+  echo "Emulator Android services did not become ready" >&2
+  adb shell getprop > "$REPORT_DIR/getprop-timeout.txt" 2>&1 || true
+  adb logcat -d > "$REPORT_DIR/logcat-boot-timeout.txt" 2>&1 || true
+  exit 1
+fi
+
+# These are test-environment conveniences only. A transient input/settings
+# service failure must not prevent the actual instrumentation tests from running.
+adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+adb shell settings put global window_animation_scale 0 >/dev/null 2>&1 || true
+adb shell settings put global transition_animation_scale 0 >/dev/null 2>&1 || true
+adb shell settings put global animator_duration_scale 0 >/dev/null 2>&1 || true
+
 if ! gradle -p dama-v2 installDebug installDebugAndroidTest --stacktrace; then
   adb logcat -d > "dama-v2/app/build/reports/androidTests/logcat-install.txt" || true
   exit 1
