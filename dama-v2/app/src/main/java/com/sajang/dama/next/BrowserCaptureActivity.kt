@@ -272,12 +272,14 @@ class BrowserCaptureActivity : ComponentActivity() {
                 val url = request.url.toString()
                 requestHeaders[url] = sanitizeRequestHeaders(request.requestHeaders)
                 if (isBrowserMediaUrl(url, "network")) {
-                    addCandidate(
-                        url = url,
-                        source = "network:${request.method.lowercase(Locale.US)}",
-                        sourceKey = "",
-                        headers = request.requestHeaders
-                    )
+                    runOnUiThread {
+                        addCandidate(
+                            url = url,
+                            source = "network:${request.method.lowercase(Locale.US)}",
+                            sourceKey = "",
+                            headers = request.requestHeaders
+                        )
+                    }
                 }
                 return null
             }
