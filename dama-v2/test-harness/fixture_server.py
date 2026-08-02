@@ -16,7 +16,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
-    def _send(self, status: int, content_type: str, body: bytes, **headers: str) -> None:
+    def _send(
+        self,
+        status: int,
+        content_type: str,
+        body: bytes,
+        *,
+        send_body: bool = True,
+        **headers: str,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -24,7 +32,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
         for name, value in headers.items():
             self.send_header(name.replace("_", "-"), value)
         self.end_headers()
-        self.wfile.write(body)
+        if send_body:
+            self.wfile.write(body)
 
     def _absolute(self, path: str) -> str:
         host, port = self.server.server_address
@@ -32,13 +41,16 @@ class FixtureHandler(BaseHTTPRequestHandler):
         return f"http://{public_host}:{port}{path}"
 
     def do_HEAD(self) -> None:
-        self.do_GET(send_body=False)
+        self._route(send_body=False)
 
-    def do_GET(self, send_body: bool = True) -> None:  # type: ignore[override]
+    def do_GET(self) -> None:
+        self._route(send_body=True)
+
+    def _route(self, *, send_body: bool) -> None:
         path = urlparse(self.path).path
 
         if path == "/health":
-            self._send(200, "text/plain; charset=utf-8", b"ok")
+            self._send(200, "text/plain; charset=utf-8", b"ok", send_body=send_body)
             return
 
         if path == "/page/direct":
@@ -47,7 +59,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "<!doctype html><html><head><title>fixture direct</title></head>"
                 f"<body><video controls src=\"{media}\"></video></body></html>"
             ).encode()
-            self._send(200, "text/html; charset=utf-8", body)
+            self._send(200, "text/html; charset=utf-8", body, send_body=send_body)
             return
 
         if path == "/page/hls":
@@ -56,7 +68,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "<!doctype html><html><head><title>fixture hls</title></head>"
                 f"<body><video controls src=\"{manifest}\"></video></body></html>"
             ).encode()
-            self._send(200, "text/html; charset=utf-8", body)
+            self._send(200, "text/html; charset=utf-8", body, send_body=send_body)
             return
 
         if path == "/page/dash":
@@ -65,12 +77,18 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "<!doctype html><html><head><title>fixture dash</title></head>"
                 f"<body><video controls src=\"{manifest}\"></video></body></html>"
             ).encode()
-            self._send(200, "text/html; charset=utf-8", body)
+            self._send(200, "text/html; charset=utf-8", body, send_body=send_body)
             return
 
         if path == "/media/sample.mp4":
             body = b"\x00\x00\x00\x18ftypmp42dama-fixture"
-            self._send(200, "video/mp4", body, Accept_Ranges="bytes")
+            self._send(
+                200,
+                "video/mp4",
+                body,
+                send_body=send_body,
+                Accept_Ranges="bytes",
+            )
             return
 
         if path == "/hls/master.m3u8":
@@ -83,11 +101,21 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 f"{self._absolute('/hls/segment0.ts')}\n"
                 "#EXT-X-ENDLIST\n"
             ).encode()
-            self._send(200, "application/vnd.apple.mpegurl", body)
+            self._send(
+                200,
+                "application/vnd.apple.mpegurl",
+                body,
+                send_body=send_body,
+            )
             return
 
         if path == "/hls/segment0.ts":
-            self._send(200, "video/mp2t", b"G" + (b"\x00" * 187))
+            self._send(
+                200,
+                "video/mp2t",
+                b"G" + (b"\x00" * 187),
+                send_body=send_body,
+            )
             return
 
         if path == "/dash/manifest.mpd":
@@ -100,15 +128,26 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "<BaseURL>/media/sample.mp4</BaseURL>"
                 "</Representation></AdaptationSet></Period></MPD>"
             ).encode()
-            self._send(200, "application/dash+xml", body)
+            self._send(200, "application/dash+xml", body, send_body=send_body)
             return
 
         if path == "/status/403":
-            self._send(403, "text/plain; charset=utf-8", b"forbidden")
+            self._send(
+                403,
+                "text/plain; charset=utf-8",
+                b"forbidden",
+                send_body=send_body,
+            )
             return
 
         if path == "/status/429":
-            self._send(429, "text/plain; charset=utf-8", b"too many requests", Retry_After="60")
+            self._send(
+                429,
+                "text/plain; charset=utf-8",
+                b"too many requests",
+                send_body=send_body,
+                Retry_After="60",
+            )
             return
 
         if path == "/login":
@@ -116,14 +155,25 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 200,
                 "text/html; charset=utf-8",
                 b"<html><body>Sign in to continue</body></html>",
+                send_body=send_body,
             )
             return
 
         if path == "/cookie-required":
             if "dama_session=fixture" not in self.headers.get("Cookie", ""):
-                self._send(403, "text/plain; charset=utf-8", b"cookie required")
+                self._send(
+                    403,
+                    "text/plain; charset=utf-8",
+                    b"cookie required",
+                    send_body=send_body,
+                )
                 return
-            self._send(200, "text/html; charset=utf-8", b"<html><body>cookie ok</body></html>")
+            self._send(
+                200,
+                "text/html; charset=utf-8",
+                b"<html><body>cookie ok</body></html>",
+                send_body=send_body,
+            )
             return
 
         if path == "/reset":
@@ -132,7 +182,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.connection.close()
             return
 
-        self._send(404, "text/plain; charset=utf-8", b"not found")
+        self._send(
+            404,
+            "text/plain; charset=utf-8",
+            b"not found",
+            send_body=send_body,
+        )
 
 
 def main() -> None:
