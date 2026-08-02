@@ -2,12 +2,15 @@
 """Focused Pornhub probe with bounded desktop-browser retries.
 
 The probe uses yt-dlp's official PornHub extractor, desktop Chrome request
-semantics, and the site's ordinary age-confirmation cookies. It does not bypass
-login, geo restrictions, removed content, paywalls, encryption, or DRM.
+semantics, and the site's ordinary age-confirmation cookies. If the fixed public
+sample expires, it discovers a current public video from an ordinary listing
+page. It does not bypass login, geo restrictions, removed content, paywalls,
+encryption, or DRM.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import pathlib
@@ -16,18 +19,30 @@ import sys
 import tempfile
 import time
 from typing import Any
+from urllib.parse import urljoin, urlsplit
+
+from playwright.async_api import async_playwright
 
 
-URL = "https://www.pornhub.com/view_video.php?viewkey=69888bb820b6e"
+FIXED_URL = "https://www.pornhub.com/view_video.php?viewkey=69888bb820b6e"
+DISCOVERY_PAGES = (
+    "https://www.pornhub.com/video?o=ht",
+    "https://www.pornhub.com/video?o=mv",
+    "https://www.pornhub.com/",
+)
 DESKTOP_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/138.0.0.0 Safari/537.36"
 )
-AGE_COOKIES = (
-    "age_verified=1; accessAgeDisclaimerPH=1; "
-    "accessAgeDisclaimerUK=1; accessPH=1; platform=pc"
-)
+AGE_COOKIE_VALUES = {
+    "age_verified": "1",
+    "accessAgeDisclaimerPH": "1",
+    "accessAgeDisclaimerUK": "1",
+    "accessPH": "1",
+    "platform": "pc",
+}
+AGE_COOKIES = "; ".join(f"{name}={value}" for name, value in AGE_COOKIE_VALUES.items())
 
 
 def run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -81,7 +96,72 @@ def classify(text: str) -> str:
     return "EXTRACTION_FAILED"
 
 
-def extract_info() -> tuple[dict[str, Any] | None, list[str]]:
+def safe_page(url: str) -> str:
+    parsed = urlsplit(url)
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+
+async def discover_public_urls() -> list[str]:
+    discovered: list[str] = []
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--mute-audio",
+                "--no-sandbox",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent=DESKTOP_UA,
+            locale="en-US",
+            timezone_id="America/New_York",
+            viewport={"width": 1365, "height": 900},
+            ignore_https_errors=True,
+        )
+        await context.add_cookies(
+            [
+                {
+                    "name": name,
+                    "value": value,
+                    "domain": ".pornhub.com",
+                    "path": "/",
+                }
+                for name, value in AGE_COOKIE_VALUES.items()
+            ]
+        )
+        page = await context.new_page()
+        for listing_url in DISCOVERY_PAGES:
+            try:
+                await page.goto(
+                    listing_url,
+                    wait_until="domcontentloaded",
+                    timeout=75_000,
+                )
+                await page.wait_for_timeout(5_000)
+                hrefs = await page.locator(
+                    'a[href*="view_video.php?viewkey="]'
+                ).evaluate_all(
+                    "elements => elements.map(element => element.getAttribute('href')).filter(Boolean)"
+                )
+                for href in hrefs:
+                    absolute = urljoin(page.url, str(href))
+                    if "view_video.php?viewkey=" not in absolute:
+                        continue
+                    if absolute not in discovered:
+                        discovered.append(absolute)
+                    if len(discovered) >= 5:
+                        break
+            except Exception:
+                continue
+            if len(discovered) >= 5:
+                break
+        await context.close()
+        await browser.close()
+    return discovered
+
+
+def extract_info(url: str) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
     attempts = (
         ["--impersonate", "chrome"],
@@ -93,7 +173,7 @@ def extract_info() -> tuple[dict[str, Any] | None, list[str]]:
             "--dump-single-json",
             "--no-warnings",
             *extra,
-            URL,
+            url,
         ]
         completed = run(command, timeout=150)
         json_lines = [
@@ -129,7 +209,11 @@ def choose_format(info: dict[str, Any]) -> dict[str, Any] | None:
     return max(viable, key=score)
 
 
-def download_sample(format_id: str, output: pathlib.Path) -> tuple[pathlib.Path | None, str]:
+def download_sample(
+    url: str,
+    format_id: str,
+    output: pathlib.Path,
+) -> tuple[pathlib.Path | None, str]:
     command = base_command() + [
         "--impersonate",
         "chrome",
@@ -142,7 +226,7 @@ def download_sample(format_id: str, output: pathlib.Path) -> tuple[pathlib.Path 
         "mp4",
         "--output",
         str(output),
-        URL,
+        url,
     ]
     completed = run(command, timeout=300)
     if completed.returncode != 0:
@@ -194,17 +278,47 @@ def main() -> int:
         "sample_bytes": 0,
         "failure_class": None,
         "detail": None,
+        "discovery": "not-run",
     }
 
-    info, errors = extract_info()
-    if info is None:
-        detail = " || ".join(errors)
+    candidates: list[tuple[str, str]] = [("fixed", FIXED_URL)]
+    selected_url: str | None = None
+    info: dict[str, Any] | None = None
+    all_errors: list[str] = []
+
+    fixed_info, fixed_errors = extract_info(FIXED_URL)
+    if fixed_info is not None:
+        selected_url = FIXED_URL
+        info = fixed_info
+        report["candidate_source"] = "fixed"
+        report["discovery"] = "not-needed"
+    else:
+        all_errors.extend(fixed_errors)
+        report["discovery"] = "started"
+        discovered = asyncio.run(discover_public_urls())
+        report["discovered_candidates"] = len(discovered)
+        candidates.extend(("listing", url) for url in discovered)
+        for source, candidate_url in candidates[1:4]:
+            candidate_info, errors = extract_info(candidate_url)
+            if candidate_info is not None:
+                selected_url = candidate_url
+                info = candidate_info
+                report["candidate_source"] = source
+                report["discovery"] = "success"
+                break
+            all_errors.extend(errors)
+        if info is None:
+            report["discovery"] = "failed"
+
+    if info is None or selected_url is None:
+        detail = " || ".join(all_errors)
         report.update(
             extraction="failed",
             failure_class=classify(detail),
             detail=detail,
         )
     else:
+        report["page"] = safe_page(selected_url)
         report["extraction"] = "success"
         report["extractor"] = info.get("extractor_key") or info.get("extractor")
         report["format_count"] = len(info.get("formats") or [])
@@ -220,7 +334,11 @@ def main() -> int:
             report["height"] = candidate.get("height")
             with tempfile.TemporaryDirectory(prefix="dama-pornhub-") as temp:
                 target = pathlib.Path(temp) / "sample.mp4"
-                downloaded, error = download_sample(str(candidate.get("format_id")), target)
+                downloaded, error = download_sample(
+                    selected_url,
+                    str(candidate.get("format_id")),
+                    target,
+                )
                 if downloaded is None:
                     report.update(
                         sample_download="failed",
