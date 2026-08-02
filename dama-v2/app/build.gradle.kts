@@ -12,8 +12,8 @@ android {
         applicationId = "com.sajang.dama.next"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "2.0.0-dev6-hls"
+        versionCode = 7
+        versionName = "2.0.0-dev7-browser"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -63,6 +63,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
+    implementation("androidx.webkit:webkit:1.15.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
