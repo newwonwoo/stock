@@ -8,6 +8,10 @@ on:
       - ".github/workflows/build-dama-v2.yml"
   workflow_dispatch:
 
+concurrency:
+  group: dama-v2-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
