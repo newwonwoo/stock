@@ -65,6 +65,13 @@ class YtDlpDownloadEngine(
                         addOption("--format", expression)
                     }
 
+                    // Page URLs are re-extracted during download, so use the
+                    // same site request profile as the analysis stage. Browser-
+                    // captured direct/HLS URLs keep their observed session headers.
+                    if (media.pageUrl != null) {
+                        applyYtDlpSiteProfile(input)
+                    }
+
                     media.headers.forEach { (name, value) ->
                         if (name.isNotBlank() && value.isNotBlank()) {
                             addOption("--add-header", "$name:$value")
