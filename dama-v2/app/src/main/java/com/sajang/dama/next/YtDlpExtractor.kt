@@ -6,8 +6,6 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.mapper.VideoFormat
 import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -17,10 +15,6 @@ class YtDlpExtractor(
     override val id: String = "yt-dlp"
 
     private val appContext = context.applicationContext
-    private val initMutex = Mutex()
-
-    @Volatile
-    private var initialized = false
 
     override suspend fun extract(
         input: String,
@@ -28,7 +22,7 @@ class YtDlpExtractor(
     ): ExtractionResult = withContext(Dispatchers.IO) {
         try {
             reporter.report(PipelineStage.INITIALIZING_ENGINE)
-            ensureInitialized()
+            YtDlpRuntime.ensureReady(appContext)
 
             reporter.report(PipelineStage.EXTRACTING)
             val extractionUrl = stripFragmentForExtraction(input)
@@ -39,7 +33,7 @@ class YtDlpExtractor(
             }
 
             reporter.report(PipelineStage.PARSING_FORMATS)
-            val descriptors = mapVideoInfo(info)
+            val descriptors = mapVideoInfo(info, extractionUrl)
             if (descriptors.isEmpty()) {
                 ExtractionResult.Unsupported(
                     extractorId = id,
@@ -71,15 +65,6 @@ class YtDlpExtractor(
             "Accept-Language:ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
         )
         if (forceIpv4) addOption("-4")
-    }
-
-    private suspend fun ensureInitialized() {
-        if (initialized) return
-        initMutex.withLock {
-            if (initialized) return
-            YoutubeDL.getInstance().init(appContext)
-            initialized = true
-        }
     }
 
     private companion object {
@@ -137,12 +122,21 @@ internal fun isConnectionReset(error: Throwable): Boolean {
     return false
 }
 
-internal fun mapVideoInfo(info: VideoInfo): List<MediaDescriptor> {
+internal fun mapVideoInfo(
+    info: VideoInfo,
+    pageUrl: String? = null
+): List<MediaDescriptor> {
     val title = info.title ?: info.fulltitle ?: "영상"
     val fallbackHeaders = info.httpHeaders.orEmpty()
 
     val mappedFormats = info.formats.orEmpty()
-        .mapNotNull { format -> format.toDescriptor(title, fallbackHeaders) }
+        .mapNotNull { format ->
+            format.toDescriptor(
+                title = title,
+                fallbackHeaders = fallbackHeaders,
+                pageUrl = pageUrl
+            )
+        }
         .distinctBy { descriptor ->
             listOf(
                 descriptor.formatId.orEmpty(),
@@ -160,6 +154,7 @@ internal fun mapVideoInfo(info: VideoInfo): List<MediaDescriptor> {
             manifestUrl = info.manifestUrl,
             kind = inferKind(info.manifestUrl ?: fallbackUrl, info.ext),
             title = title,
+            pageUrl = pageUrl,
             formatId = info.formatId,
             qualityLabel = info.resolution ?: info.format,
             trackRole = TrackRole.MUXED,
@@ -174,7 +169,8 @@ internal fun mapVideoInfo(info: VideoInfo): List<MediaDescriptor> {
 
 private fun VideoFormat.toDescriptor(
     title: String,
-    fallbackHeaders: Map<String, String>
+    fallbackHeaders: Map<String, String>,
+    pageUrl: String?
 ): MediaDescriptor? {
     val resolvedUrl = url ?: manifestUrl ?: return null
     val videoPresent = !vcodec.isNullOrBlank() && vcodec != "none"
@@ -195,6 +191,7 @@ private fun VideoFormat.toDescriptor(
         manifestUrl = manifestUrl,
         kind = inferKind(manifestUrl ?: resolvedUrl, ext),
         title = title,
+        pageUrl = pageUrl,
         formatId = formatId,
         qualityLabel = label,
         trackRole = role,
