@@ -49,6 +49,9 @@ jobs:
       - name: Build debug APK
         run: gradle -p dama-v2 assembleDebug --stacktrace
 
+      - name: Compile emulator test APK
+        run: gradle -p dama-v2 assembleDebugAndroidTest --stacktrace
+
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
@@ -68,7 +71,7 @@ jobs:
   target-sites:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +89,6 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Probe sites with yt-dlp and save playable samples
-        id: probe
         shell: bash
         run: |
           set +e
@@ -94,33 +96,69 @@ jobs:
           DAMA_TARGET_REPORT=dama-v2/build/target-sites/yt-dlp-report.json \
             python dama-v2/test-harness/probe_target_sites.py \
             | tee dama-v2/build/target-sites/yt-dlp-console.log
-          status=${PIPESTATUS[0]}
-          echo "$status" > dama-v2/build/target-sites/yt-dlp-status.txt
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/yt-dlp-status.txt
           exit 0
 
       - name: Probe sites with Chromium network sniffing
-        id: browser_probe
         shell: bash
         run: |
           set +e
           DAMA_BROWSER_REPORT=dama-v2/build/target-sites/browser-report.json \
             python dama-v2/test-harness/browser_sniff_targets.py \
             | tee dama-v2/build/target-sites/browser-console.log
-          status=${PIPESTATUS[0]}
-          echo "$status" > dama-v2/build/target-sites/browser-status.txt
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/browser-status.txt
           exit 0
 
-      - name: Probe NjavTV HLS.js player directly
-        id: njavtv_hls_probe
+      - name: Probe NjavTV browser-session HLS
         shell: bash
         run: |
           set +e
           DAMA_NJAVTV_REPORT=dama-v2/build/target-sites/njavtv-hls-report.json \
             python dama-v2/test-harness/probe_njavtv_hls.py \
             | tee dama-v2/build/target-sites/njavtv-hls-console.log
-          status=${PIPESTATUS[0]}
-          echo "$status" > dama-v2/build/target-sites/njavtv-hls-status.txt
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/njavtv-hls-status.txt
           exit 0
+
+      - name: Probe PikPak public share API
+        shell: bash
+        run: |
+          set +e
+          DAMA_PIKPAK_REPORT=dama-v2/build/target-sites/pikpak-share-report.json \
+            python dama-v2/test-harness/probe_pikpak_share.py \
+            | tee dama-v2/build/target-sites/pikpak-share-console.log
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/pikpak-share-status.txt
+          exit 0
+
+      - name: Evaluate target-site MVP gate
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path("dama-v2/build/target-sites")
+          ytdlp = json.loads((root / "yt-dlp-report.json").read_text())
+          njavtv = json.loads((root / "njavtv-hls-report.json").read_text())
+          pikpak = json.loads((root / "pikpak-share-report.json").read_text())
+
+          pornhub = next(item for item in ytdlp["results"] if item["site"] == "pornhub")
+          checks = {
+              "pornhub": (
+                  pornhub["extraction"] == "success"
+                  and pornhub["sample_download"] == "success"
+                  and pornhub["ffprobe"] == "success"
+                  and pornhub["video_streams"] > 0
+              ),
+              "njavtv": bool(njavtv.get("passed")),
+              "pikpak": bool(pikpak.get("passed")),
+          }
+          report = {"all_passed": all(checks.values()), "checks": checks}
+          (root / "mvp-gate.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          sys.exit(0 if report["all_passed"] else 1)
+          PY
 
       - name: Upload target-site reports
         if: always()
@@ -130,12 +168,10 @@ jobs:
           if-no-files-found: error
           path: dama-v2/build/target-sites
 
-      - name: Enforce real target-site MVP save gate
-        run: test "$(cat dama-v2/build/target-sites/yt-dlp-status.txt)" = "0"
-
   emulator:
     needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -172,7 +208,7 @@ jobs:
           cat /tmp/dama-fixture.log
           exit 1
 
-      - name: Emulator UI and Android yt-dlp tests
+      - name: Emulator UI, Android yt-dlp and MediaStore tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -181,7 +217,7 @@ jobs:
           disable-animations: true
           emulator-options: >-
             -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-            -camera-back none
+            -camera-back none -no-metrics
           script: |
             set +e
             gradle -p dama-v2 connectedDebugAndroidTest --stacktrace
