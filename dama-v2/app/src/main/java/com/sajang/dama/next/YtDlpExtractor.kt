@@ -32,23 +32,10 @@ class YtDlpExtractor(
 
             reporter.report(PipelineStage.EXTRACTING)
             val extractionUrl = stripFragmentForExtraction(input)
-            val firstAttempt = runCatching {
+            val info = executeWithSingleIpv4Retry { forceIpv4 ->
                 YoutubeDL.getInstance().getInfo(
-                    buildRequest(extractionUrl, forceIpv4 = false)
+                    buildRequest(extractionUrl, forceIpv4)
                 )
-            }
-
-            val info = firstAttempt.getOrElse { firstError ->
-                if (!isConnectionReset(firstError)) throw firstError
-
-                val secondAttempt = runCatching {
-                    YoutubeDL.getInstance().getInfo(
-                        buildRequest(extractionUrl, forceIpv4 = true)
-                    )
-                }
-                secondAttempt.getOrElse { secondError ->
-                    throw YtDlpRetryException(firstError, secondError)
-                }
             }
 
             reporter.report(PipelineStage.PARSING_FORMATS)
@@ -114,6 +101,22 @@ private class YtDlpRetryException(
     },
     secondError
 )
+
+internal suspend fun <T> executeWithSingleIpv4Retry(
+    execute: suspend (forceIpv4: Boolean) -> T
+): T {
+    return try {
+        execute(false)
+    } catch (firstError: Throwable) {
+        if (!isConnectionReset(firstError)) throw firstError
+
+        try {
+            execute(true)
+        } catch (secondError: Throwable) {
+            throw YtDlpRetryException(firstError, secondError)
+        }
+    }
+}
 
 internal fun stripFragmentForExtraction(input: String): String =
     input.substringBefore('#').ifBlank { input }
