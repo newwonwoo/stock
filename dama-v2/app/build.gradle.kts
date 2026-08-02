@@ -12,11 +12,11 @@ android {
         applicationId = "com.sajang.dama.next"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "2.0.0-dev3"
+        versionCode = 4
+        versionName = "2.0.0-dev4-test"
 
         ndk {
-            abiFilters += "arm64-v8a"
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -43,6 +43,10 @@ android {
         compose = true
     }
 
+    testOptions {
+        animationsDisabled = true
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
@@ -64,7 +68,13 @@ dependencies {
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
