@@ -129,12 +129,12 @@ jobs:
           echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/njavtv-hls-status.txt
           exit 0
 
-      - name: Probe PikPak public share API
+      - name: Probe PikPak playable public media
         shell: bash
         run: |
           set +e
           DAMA_PIKPAK_REPORT=dama-v2/build/target-sites/pikpak-share-report.json \
-            python dama-v2/test-harness/probe_pikpak_share.py \
+            python dama-v2/test-harness/probe_pikpak_playable.py \
             | tee dama-v2/build/target-sites/pikpak-share-console.log
           echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/pikpak-share-status.txt
           exit 0
