@@ -2,6 +2,7 @@ package com.sajang.dama.next
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -127,5 +128,60 @@ class ExtractionPipelineTest {
         assertNotNull(error)
         assertEquals(listOf(false, true), attempts)
         assertEquals(FailureCode.NETWORK_RESET, classifyYtDlpFailure(error!!).code)
+    }
+
+    @Test
+    fun networkResetIsEligibleForBrowserFallback() {
+        val decision = decideBrowserFallback(
+            FailureDetail(
+                stage = PipelineStage.EXTRACTING,
+                code = FailureCode.NETWORK_RESET,
+                message = "reset"
+            )
+        )
+
+        assertTrue(decision.eligible)
+        assertEquals(BrowserFallbackReason.TRANSPORT_RESET, decision.reason)
+    }
+
+    @Test
+    fun rateLimitDoesNotTriggerMoreBrowserTraffic() {
+        val decision = decideBrowserFallback(
+            FailureDetail(
+                stage = PipelineStage.EXTRACTING,
+                code = FailureCode.RATE_LIMITED,
+                message = "wait"
+            )
+        )
+
+        assertFalse(decision.eligible)
+    }
+
+    @Test
+    fun diagnosticUrlRemovesQueryFragmentAndCredentials() {
+        val sanitized = sanitizeUrlForDiagnostics(
+            "https://name:password@example.com:8443/watch/123?token=secret#player"
+        )
+
+        assertEquals("https://example.com:8443/watch/123", sanitized)
+    }
+
+    @Test
+    fun diagnosticReportDoesNotContainSecrets() {
+        val session = DiagnosticSession(
+            sessionId = "test-session",
+            startedAtMillis = 0L
+        )
+        session.record(
+            category = "FAILURE",
+            message = "https://example.com/watch?id=1&token=secret",
+            detail = "Cookie: session=private Authorization: Bearer-private"
+        )
+
+        val report = session.render()
+        assertFalse(report.contains("secret"))
+        assertFalse(report.contains("session=private"))
+        assertFalse(report.contains("Bearer-private"))
+        assertTrue(report.contains("https://example.com/watch"))
     }
 }
