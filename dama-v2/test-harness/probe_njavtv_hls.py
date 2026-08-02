@@ -98,7 +98,7 @@ def is_segment(url: str, content_type: str) -> bool:
     return (
         parsed.netloc.endswith("surrit.com")
         and (
-            path.endswith((".ts", ".m4s", ".mp4"))
+            path.endswith((".ts", ".m4s", ".mp4", ".jpeg", ".jpg"))
             or "video/mp2t" in media_type
             or "video/mp4" in media_type
             or "application/octet-stream" in media_type
