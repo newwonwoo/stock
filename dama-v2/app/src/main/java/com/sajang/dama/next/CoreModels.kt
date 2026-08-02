@@ -53,6 +53,7 @@ data class MediaDescriptor(
     val sourceUrl: String,
     val kind: MediaKind,
     val title: String = "영상",
+    val pageUrl: String? = null,
     val formatId: String? = null,
     val qualityLabel: String? = null,
     val trackRole: TrackRole = TrackRole.UNKNOWN,
