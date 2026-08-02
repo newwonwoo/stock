@@ -13,7 +13,6 @@ import asyncio
 import json
 import os
 import pathlib
-import re
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -200,7 +199,7 @@ async def validate_link(
             fail_on_status_code=False,
         )
         body = await response.body()
-        headers = await response.all_headers()
+        headers = response.headers
         candidate.status = response.status
         candidate.bytes_received = len(body)
         candidate.content_type = headers.get("content-type")
@@ -299,9 +298,6 @@ async def main_async() -> int:
         if response_tasks:
             await asyncio.gather(*response_tasks, return_exceptions=True)
 
-        # If the page exposed file IDs but not links, repeat the public file_info
-        # request with headers observed from the page itself. No hard-coded client
-        # credentials or account cookies are introduced here.
         share_parts = [part for part in urlsplit(SHARE_URL).path.split("/") if part]
         share_id = share_parts[1] if len(share_parts) >= 2 and share_parts[0] == "s" else ""
         if share_id and file_ids and api_headers and not raw_links:
@@ -317,7 +313,7 @@ async def main_async() -> int:
                         timeout=30_000,
                         fail_on_status_code=False,
                     )
-                    headers = await response.all_headers()
+                    headers = response.headers
                     if response.status in range(200, 300) and "json" in headers.get("content-type", ""):
                         payload = await response.json()
                         parsed_json += 1
