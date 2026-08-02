@@ -10,6 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.sajang.dama"
+        testApplicationId = "com.sajang.dama.next.test"
         minSdk = 29
         targetSdk = 36
         versionCode = 20
