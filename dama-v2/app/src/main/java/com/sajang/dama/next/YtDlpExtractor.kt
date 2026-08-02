@@ -64,20 +64,60 @@ class YtDlpExtractor(
         addOption("--retries", "0")
         addOption("--extractor-retries", "0")
         addOption("--no-warnings")
-        addOption("--user-agent", ANDROID_CHROME_USER_AGENT)
-        addOption(
-            "--add-header",
-            "Accept-Language:ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-        )
+        applyYtDlpSiteProfile(input)
         if (forceIpv4) addOption("-4")
     }
+}
 
-    private companion object {
-        const val ANDROID_CHROME_USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
+internal data class YtDlpSiteProfile(
+    val userAgent: String,
+    val headers: Map<String, String>
+)
+
+internal fun ytDlpSiteProfile(input: String): YtDlpSiteProfile {
+    val host = runCatching { URI(input).host.orEmpty() }
+        .getOrDefault("")
+        .lowercase(Locale.US)
+    val pornhub = host == "pornhub.com" || host.endsWith(".pornhub.com")
+
+    return if (pornhub) {
+        YtDlpSiteProfile(
+            userAgent = DESKTOP_CHROME_USER_AGENT,
+            headers = linkedMapOf(
+                "Accept-Language" to "en-US,en;q=0.9",
+                "Cookie" to PORNHUB_AGE_COOKIES
+            )
+        )
+    } else {
+        YtDlpSiteProfile(
+            userAgent = ANDROID_CHROME_USER_AGENT,
+            headers = mapOf(
+                "Accept-Language" to "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+            )
+        )
     }
 }
+
+internal fun YoutubeDLRequest.applyYtDlpSiteProfile(input: String) {
+    val profile = ytDlpSiteProfile(input)
+    addOption("--user-agent", profile.userAgent)
+    profile.headers.forEach { (name, value) ->
+        addOption("--add-header", "$name:$value")
+    }
+}
+
+internal const val ANDROID_CHROME_USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
+
+internal const val DESKTOP_CHROME_USER_AGENT =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/138.0.0.0 Safari/537.36"
+
+internal const val PORNHUB_AGE_COOKIES =
+    "age_verified=1; accessAgeDisclaimerPH=1; " +
+        "accessAgeDisclaimerUK=1; accessPH=1; platform=pc"
 
 internal fun shouldRefreshExtractor(url: String): Boolean {
     val host = runCatching { URI(url).host }
