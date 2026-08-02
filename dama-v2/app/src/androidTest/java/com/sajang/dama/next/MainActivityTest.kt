@@ -1,7 +1,6 @@
 package com.sajang.dama.next
 
 import android.provider.MediaStore
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -66,7 +65,7 @@ class MainActivityTest {
         composeRule.waitUntil(timeoutMillis) {
             runCatching {
                 composeRule.onNodeWithText(expected, substring = true)
-                    .assertExists()
+                    .assertIsDisplayed()
                 true
             }.getOrDefault(false)
         }
