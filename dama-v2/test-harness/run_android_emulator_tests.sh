@@ -28,13 +28,11 @@ for test_selector in "${tests[@]}"; do
   test_name=$(printf '%s' "$test_selector" | tr '#.' '__')
   log_file="$REPORT_DIR/${test_name}.txt"
 
-  set +e
   timeout 180s adb shell am instrument -w -r \
     -e class "$test_selector" \
     com.sajang.dama.test/androidx.test.runner.AndroidJUnitRunner \
     | tee "$log_file"
   command_status=${PIPESTATUS[0]}
-  set -e
 
   adb logcat -d > "$REPORT_DIR/${test_name}-logcat.txt" || true
 
