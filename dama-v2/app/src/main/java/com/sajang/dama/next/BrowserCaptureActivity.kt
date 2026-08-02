@@ -19,7 +19,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -67,7 +66,6 @@ object BrowserCaptureContract {
         val kind = runCatching {
             MediaKind.valueOf(data.getStringExtra(EXTRA_MEDIA_KIND).orEmpty())
         }.getOrDefault(kindFromUrl(sourceUrl))
-        val pageUrl = data.getStringExtra(EXTRA_PAGE_URL)
         val title = data.getStringExtra(EXTRA_MEDIA_TITLE)
             ?.takeIf { it.isNotBlank() }
             ?: "영상"
@@ -285,7 +283,7 @@ class BrowserCaptureActivity : ComponentActivity() {
             }
         }
 
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+        if (WebViewFeature.isFeatureSupported("DOCUMENT_START_SCRIPT")) {
             WebViewCompat.addDocumentStartJavaScript(
                 webView,
                 CAPTURE_SCRIPT,
