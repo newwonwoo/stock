@@ -65,6 +65,48 @@ jobs:
             dama-v2/app/build/reports/tests/testDebugUnitTest
             dama-v2/app/build/reports/lint-results-debug.html
 
+  target-sites:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install target-site probe dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --disable-pip-version-check yt-dlp curl-cffi
+
+      - name: Probe PikPak, njavtv and Pornhub
+        id: probe
+        shell: bash
+        run: |
+          set +e
+          mkdir -p dama-v2/build/target-sites
+          DAMA_TARGET_REPORT=dama-v2/build/target-sites/report.json \
+            python dama-v2/test-harness/probe_target_sites.py \
+            | tee dama-v2/build/target-sites/console.log
+          status=${PIPESTATUS[0]}
+          echo "$status" > dama-v2/build/target-sites/status.txt
+          exit 0
+
+      - name: Upload target-site report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-target-site-report
+          if-no-files-found: error
+          path: dama-v2/build/target-sites
+
+      - name: Enforce real target-site MVP gate
+        run: test "$(cat dama-v2/build/target-sites/status.txt)" = "0"
+
   emulator:
     needs: verify
     runs-on: ubuntu-latest
