@@ -9,11 +9,11 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.sajang.dama.next"
+        applicationId = "com.sajang.dama"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "2.0.0-dev7-browser"
+        versionCode = 20
+        versionName = "2.0.0-dev8-browser"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
