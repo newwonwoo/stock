@@ -7,6 +7,7 @@ import com.yausername.youtubedl_android.mapper.VideoFormat
 import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.net.URI
 import java.util.Locale
 
 class YtDlpExtractor(
@@ -24,8 +25,12 @@ class YtDlpExtractor(
             reporter.report(PipelineStage.INITIALIZING_ENGINE)
             YtDlpRuntime.ensureReady(appContext)
 
-            reporter.report(PipelineStage.EXTRACTING)
             val extractionUrl = stripFragmentForExtraction(input)
+            if (shouldRefreshExtractor(extractionUrl)) {
+                YtDlpRuntime.updateIfDue(appContext)
+            }
+
+            reporter.report(PipelineStage.EXTRACTING)
             val info = executeWithSingleIpv4Retry { forceIpv4 ->
                 YoutubeDL.getInstance().getInfo(
                     buildRequest(extractionUrl, forceIpv4)
@@ -72,6 +77,15 @@ class YtDlpExtractor(
             "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
     }
+}
+
+internal fun shouldRefreshExtractor(url: String): Boolean {
+    val host = runCatching { URI(url).host }
+        .getOrNull()
+        ?.lowercase(Locale.US)
+        ?: return false
+    return host !in setOf("localhost", "127.0.0.1", "10.0.2.2") &&
+        !host.endsWith(".local")
 }
 
 private class YtDlpRetryException(
