@@ -1,0 +1,50 @@
+name: Build Dama APK
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Install Android SDK 36
+        run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Apply v0.7 safe-mode patch
+        run: python tools/patch_dama_v07.py
+      - name: Apply v0.8 process-isolation patch
+        run: python tools/patch_dama_v08.py
+      - name: Apply v0.9 isolated-browser patch
+        run: python tools/patch_dama_v09.py
+      - name: Apply v1.0 universal crash guard
+        run: python tools/patch_dama_v10.py
+      - name: Apply v1.1 HTTP zero retry fix
+        run: python tools/patch_dama_v11.py
+      - name: Apply v1.2.2 compact ARM64 GeckoView build
+        run: python tools/patch_dama_v12.py
+      - name: Apply v1.3 capture bridge fix
+        run: python tools/patch_dama_v13.py
+      - name: Fix Worker failure detail compatibility
+        run: sed -i 's/BrowserDownloadWorker.KEY_FAILURE_TECHNICAL/BrowserDownloadWorker.KEY_FAILURE_DETAIL/g' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
+      - name: Fix Compose scope import
+        run: sed -i '/import androidx.compose.foundation.layout.weight/d' dama/app/src/main/java/com/sajang/dama/MainActivity.kt
+      - name: Build unsigned compact ARM64 release APK
+        run: gradle -p dama assembleRelease --stacktrace
+      - name: Collect APK and signing tool
+        run: |
+          mkdir -p stable-build
+          cp dama/app/build/outputs/apk/release/app-release-unsigned.apk stable-build/dama-v1.3-arm64-unsigned.apk
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" stable-build/apksigner.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dama-v1.3-arm64-unsigned
+          path: stable-build/
