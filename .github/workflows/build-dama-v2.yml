@@ -1,0 +1,293 @@
+name: Build Dama v2 Core
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "dama-v2/**"
+      - ".github/workflows/build-dama-v2.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: dama-v2-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install host test dependencies
+        run: python -m pip install --disable-pip-version-check yt-dlp
+
+      - name: Controlled network integration tests
+        working-directory: dama-v2/test-harness
+        run: python -m unittest -v test_fixture_server.py
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Install Android SDK 36
+        run: yes | sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Kotlin unit tests
+        run: gradle -p dama-v2 testDebugUnitTest --stacktrace
+
+      - name: Android lint
+        run: gradle -p dama-v2 lintDebug --stacktrace
+
+      - name: Build debug APK
+        run: gradle -p dama-v2 assembleDebug --stacktrace
+
+      - name: Compile emulator test APK
+        run: gradle -p dama-v2 assembleDebugAndroidTest --stacktrace
+
+      - name: Build arm64 release APK
+        run: gradle -p dama-v2 assembleRelease --stacktrace
+
+      - name: Verify release identity and ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="dama-v2/app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -s "$APK"
+          mkdir -p dama-v2/build/release-metadata
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" \
+            | tee dama-v2/build/release-metadata/aapt-badging.txt
+          grep -q "package: name='com.sajang.dama' versionCode='20'" \
+            dama-v2/build/release-metadata/aapt-badging.txt
+          unzip -Z1 "$APK" \
+            | awk -F/ '/^lib\// {print $2}' \
+            | sort -u \
+            | tee dama-v2/build/release-metadata/abis.txt
+          test "$(cat dama-v2/build/release-metadata/abis.txt)" = "arm64-v8a"
+          sha256sum "$APK" | tee dama-v2/build/release-metadata/sha256.txt
+
+      - name: Stage official Android signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLS="dama-v2/build/android-signing-tools"
+          mkdir -p "$TOOLS/lib"
+          cp "$ANDROID_HOME/build-tools/35.0.0/apksigner" "$TOOLS/"
+          cp "$ANDROID_HOME/build-tools/35.0.0/zipalign" "$TOOLS/"
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" "$TOOLS/lib/"
+          chmod +x "$TOOLS/apksigner" "$TOOLS/zipalign"
+
+      - name: Upload verified debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-verified-debug
+          path: dama-v2/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload arm64 release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-arm64-release-unsigned
+          path: |
+            dama-v2/app/build/outputs/apk/release/app-release-unsigned.apk
+            dama-v2/build/release-metadata
+
+      - name: Upload Android signing tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-tools-35-signing
+          path: dama-v2/build/android-signing-tools
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-test-reports
+          if-no-files-found: ignore
+          path: |
+            dama-v2/app/build/reports/tests/testDebugUnitTest
+            dama-v2/app/build/reports/lint-results-debug.html
+
+  target-sites:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install target-site probe dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --disable-pip-version-check "yt-dlp[default,curl-cffi]" playwright
+          python -m yt_dlp --list-impersonate-targets
+          python -m playwright install --with-deps chromium
+
+      - name: Probe sites with yt-dlp and save playable samples
+        shell: bash
+        run: |
+          set +e
+          mkdir -p dama-v2/build/target-sites
+          DAMA_TARGET_REPORT=dama-v2/build/target-sites/yt-dlp-report.json \
+            python dama-v2/test-harness/probe_target_sites.py \
+            | tee dama-v2/build/target-sites/yt-dlp-console.log
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/yt-dlp-status.txt
+          exit 0
+
+      - name: Probe Pornhub with bounded desktop retries
+        shell: bash
+        run: |
+          set +e
+          DAMA_PORNHUB_REPORT=dama-v2/build/target-sites/pornhub-report.json \
+            python dama-v2/test-harness/probe_pornhub.py \
+            | tee dama-v2/build/target-sites/pornhub-console.log
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/pornhub-status.txt
+          exit 0
+
+      - name: Probe sites with Chromium network sniffing
+        shell: bash
+        run: |
+          set +e
+          DAMA_BROWSER_REPORT=dama-v2/build/target-sites/browser-report.json \
+            python dama-v2/test-harness/browser_sniff_targets.py \
+            | tee dama-v2/build/target-sites/browser-console.log
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/browser-status.txt
+          exit 0
+
+      - name: Probe NjavTV browser-session HLS
+        shell: bash
+        run: |
+          set +e
+          DAMA_NJAVTV_REPORT=dama-v2/build/target-sites/njavtv-hls-report.json \
+            python dama-v2/test-harness/probe_njavtv_hls.py \
+            | tee dama-v2/build/target-sites/njavtv-hls-console.log
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/njavtv-hls-status.txt
+          exit 0
+
+      - name: Probe PikPak playable public media
+        shell: bash
+        run: |
+          set +e
+          DAMA_PIKPAK_REPORT=dama-v2/build/target-sites/pikpak-share-report.json \
+            python dama-v2/test-harness/probe_pikpak_playable.py \
+            | tee dama-v2/build/target-sites/pikpak-share-console.log
+          echo "${PIPESTATUS[0]}" > dama-v2/build/target-sites/pikpak-share-status.txt
+          exit 0
+
+      - name: Evaluate target-site MVP gate
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path("dama-v2/build/target-sites")
+          pornhub = json.loads((root / "pornhub-report.json").read_text())
+          njavtv = json.loads((root / "njavtv-hls-report.json").read_text())
+          pikpak = json.loads((root / "pikpak-share-report.json").read_text())
+
+          checks = {
+              "pornhub": bool(pornhub.get("passed")),
+              "njavtv": bool(njavtv.get("passed")),
+              "pikpak": bool(pikpak.get("passed")),
+          }
+          report = {"all_passed": all(checks.values()), "checks": checks}
+          (root / "mvp-gate.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          sys.exit(0 if report["all_passed"] else 1)
+          PY
+
+      - name: Upload target-site reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-target-site-report
+          if-no-files-found: error
+          path: dama-v2/build/target-sites
+
+  emulator:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Install emulator SDK and system image
+        run: |
+          yes | sdkmanager \
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "emulator" \
+            "system-images;android-35;default;x86_64"
+
+      - name: Create deterministic Android virtual device
+        run: |
+          echo "no" | avdmanager create avd \
+            --force \
+            --name dama-ci \
+            --package "system-images;android-35;default;x86_64" \
+            --device "pixel_6"
+          emulator -list-avds | tee /tmp/dama-avds.txt
+          grep -Fxq "dama-ci" /tmp/dama-avds.txt
+
+      - name: Start deterministic fixture server
+        run: |
+          nohup python dama-v2/test-harness/fixture_server.py \
+            --host 0.0.0.0 --port 8765 \
+            > /tmp/dama-fixture.log 2>&1 &
+          echo $! > /tmp/dama-fixture.pid
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8765/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/dama-fixture.log
+          exit 1
+
+      - name: Launch emulator and run Android tests
+        run: bash dama-v2/test-harness/run_emulator_ci.sh
+
+      - name: Upload emulator reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dama-v2-emulator-reports
+          if-no-files-found: ignore
+          path: |
+            dama-v2/app/build/reports/androidTests
+            dama-v2/app/build/outputs/androidTest-results
+            /tmp/dama-fixture.log
+            /tmp/dama-emulator.log
